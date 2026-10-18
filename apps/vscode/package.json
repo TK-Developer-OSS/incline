@@ -1,0 +1,681 @@
+{
+	"name": "incline",
+	"displayName": "INCLINE",
+	"description": "INCLINE — an unofficial fork of Cline (Apache-2.0) with request throttling, RPM/TPM display and a task tracker. Autonomous coding agent right in your IDE, capable of creating/editing files, running commands, using the browser, and more with your permission every step of the way.",
+	"version": "4.1.25",
+	"icon": "assets/icons/icon.png",
+	"engines": {
+		"vscode": "^1.101.0"
+	},
+	"author": {
+		"name": "TK-Developer-OSS"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/TK-Developer-OSS/incline.git"
+	},
+	"homepage": "https://github.com/TK-Developer-OSS/incline",
+	"bugs": {
+		"url": "https://github.com/TK-Developer-OSS/incline/issues"
+	},
+	"license": "Apache-2.0",
+	"publisher": "TKDeveloperOSS",
+	"categories": [
+		"AI",
+		"Chat",
+		"Programming Languages",
+		"Education",
+		"Snippets",
+		"Testing"
+	],
+	"keywords": [
+		"incline",
+		"coding",
+		"agent",
+		"autonomous",
+		"ai"
+	],
+	"activationEvents": [
+		"onLanguage",
+		"onUri",
+		"onWebviewPanel:incline.tasksEditor",
+		"onView:incline.tasksView",
+		"onStartupFinished"
+	],
+	"main": "./dist/extension.js",
+	"contributes": {
+		"walkthroughs": [
+			{
+				"id": "InclineWalkthrough",
+				"title": "Meet INCLINE, your new coding partner",
+				"description": "INCLINE codes like a developer because it thinks like one. Here are 5 ways to put it to work:",
+				"steps": [
+					{
+						"id": "welcome",
+						"title": "Start with a Goal, Not Just a Prompt",
+						"description": "Tell INCLINE what you want to achieve. It plans, asks, and then codes, like a true partner.",
+						"media": {
+							"markdown": "walkthrough/step1.md"
+						}
+					},
+					{
+						"id": "learn",
+						"title": "Let INCLINE Learn Your Codebase",
+						"description": "Point INCLINE to your project. It builds understanding to make smart, context-aware changes.",
+						"media": {
+							"markdown": "walkthrough/step2.md"
+						}
+					},
+					{
+						"id": "advanced-features",
+						"title": "Always Use the Best AI Models",
+						"description": "INCLINE empowers you with State-of-the-Art AI, connecting to top models (Anthropic, Gemini, OpenAI & more).",
+						"media": {
+							"markdown": "walkthrough/step3.md"
+						}
+					},
+					{
+						"id": "mcp",
+						"title": "Extend with Powerful Tools (MCP)",
+						"description": "Connect to databases, APIs, and other external tools through MCP.",
+						"media": {
+							"markdown": "walkthrough/step4.md"
+						}
+					},
+					{
+						"id": "getting-started",
+						"title": "You're Always in Control",
+						"description": "Review INCLINE's plans and diffs. Approve changes before they happen. No surprises.",
+						"media": {
+							"markdown": "walkthrough/step5.md"
+						},
+						"content": {
+							"path": "walkthrough/step5.md"
+						}
+					}
+				]
+			}
+		],
+		"viewsContainers": {
+			"secondarySidebar": [
+				{
+					"id": "incline-tasks-secondary",
+					"title": "INCLINE Tasks",
+					"icon": "$(checklist)"
+				}
+			],
+			"activitybar": [
+				{
+					"id": "incline-ActivityBar",
+					"title": "INCLINE",
+					"icon": "assets/icons/activitybar.png"
+				}
+			]
+		},
+		"views": {
+			"incline-tasks-secondary": [
+				{
+					"type": "webview",
+					"id": "incline.tasksView",
+					"name": "Tasks"
+				}
+			],
+			"incline-ActivityBar": [
+				{
+					"type": "webview",
+					"id": "incline.SidebarProvider",
+					"name": "",
+					"icon": "assets/icons/activitybar.png"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "incline.openTasks",
+				"title": "Open Tasks",
+				"category": "INCLINE",
+				"icon": "$(checklist)"
+			},
+			{
+				"command": "incline.sendTestAlarm",
+				"title": "Send Test Alarm",
+				"category": "INCLINE"
+			},
+			{
+				"command": "incline.openTasksInEditor",
+				"title": "Open Tasks in Editor",
+				"category": "INCLINE",
+				"icon": "$(checklist)"
+			},
+			{
+				"command": "incline.plusButtonClicked",
+				"title": "New Task",
+				"icon": "$(add)"
+			},
+			{
+				"command": "incline.mcpButtonClicked",
+				"title": "MCP Servers",
+				"icon": "$(server)"
+			},
+			{
+				"command": "incline.marketplaceButtonClicked",
+				"title": "Customize",
+				"icon": "$(wrench)"
+			},
+			{
+				"command": "incline.historyButtonClicked",
+				"title": "History",
+				"icon": "$(history)"
+			},
+			{
+				"command": "incline.accountButtonClicked",
+				"title": "Account",
+				"icon": "$(account)"
+			},
+			{
+				"command": "incline.settingsButtonClicked",
+				"title": "Settings",
+				"icon": "$(settings-gear)"
+			},
+			{
+				"command": "incline.dev.createTestTasks",
+				"title": "Create Test Tasks",
+				"category": "INCLINE",
+				"when": "incline.isDevMode"
+			},
+			{
+				"command": "incline.dev.expireMcpOAuthTokens",
+				"title": "Expire MCP OAuth Tokens (for testing)",
+				"category": "INCLINE",
+				"when": "incline.isDevMode"
+			},
+			{
+				"command": "incline.addToChat",
+				"title": "Add to INCLINE",
+				"category": "INCLINE"
+			},
+			{
+				"command": "incline.addTerminalOutputToChat",
+				"title": "Add to INCLINE",
+				"category": "INCLINE"
+			},
+			{
+				"command": "incline.focusChatInput",
+				"title": "Jump to Chat Input",
+				"category": "INCLINE"
+			},
+			{
+				"command": "incline.generateGitCommitMessage",
+				"title": "Generate Commit Message with INCLINE",
+				"category": "INCLINE",
+				"icon": "$(git-commit)"
+			},
+			{
+				"command": "incline.abortGitCommitMessage",
+				"title": "Generate Commit Message with INCLINE - Stop",
+				"category": "INCLINE",
+				"icon": "$(debug-stop)"
+			},
+			{
+				"command": "incline.explainCode",
+				"title": "Explain with INCLINE",
+				"category": "INCLINE"
+			},
+			{
+				"command": "incline.improveCode",
+				"title": "Improve with INCLINE",
+				"category": "INCLINE"
+			},
+			{
+				"command": "incline.jupyterGenerateCell",
+				"title": "Generate Jupyter Cell with INCLINE",
+				"category": "INCLINE",
+				"icon": "$(sparkle)"
+			},
+			{
+				"command": "incline.jupyterExplainCell",
+				"title": "Explain Jupyter Cell with INCLINE",
+				"category": "INCLINE",
+				"icon": "$(question)"
+			},
+			{
+				"command": "incline.jupyterImproveCell",
+				"title": "Improve Jupyter Cell with INCLINE",
+				"category": "INCLINE",
+				"icon": "$(lightbulb)"
+			},
+			{
+				"command": "incline.openWalkthrough",
+				"title": "Open Walkthrough",
+				"category": "INCLINE"
+			}
+		],
+		"keybindings": [
+			{
+				"command": "incline.addToChat",
+				"key": "cmd+shift+'",
+				"mac": "cmd+shift+'",
+				"win": "ctrl+shift+'",
+				"linux": "ctrl+shift+'",
+				"when": "editorHasSelection"
+			},
+			{
+				"command": "incline.generateGitCommitMessage",
+				"when": "config.git.enabled && scmProvider == git"
+			},
+			{
+				"command": "incline.focusChatInput",
+				"key": "cmd+shift+'",
+				"mac": "cmd+shift+'",
+				"win": "ctrl+shift+'",
+				"linux": "ctrl+shift+'",
+				"when": "!editorHasSelection"
+			}
+		],
+		"menus": {
+			"view/title": [
+				{
+					"command": "incline.plusButtonClicked",
+					"group": "navigation@1",
+					"when": "view == incline.SidebarProvider"
+				},
+				{
+					"command": "incline.marketplaceButtonClicked",
+					"group": "navigation@2",
+					"when": "view == incline.SidebarProvider"
+				},
+				{
+					"command": "incline.historyButtonClicked",
+					"group": "navigation@3",
+					"when": "view == incline.SidebarProvider"
+				},
+				{
+					"command": "incline.openTasks",
+					"group": "navigation@5",
+					"when": "view == incline.SidebarProvider"
+				},
+				{
+					"command": "incline.settingsButtonClicked",
+					"group": "navigation@6",
+					"when": "view == incline.SidebarProvider"
+				}
+			],
+			"editor/context": [
+				{
+					"command": "incline.addToChat",
+					"group": "navigation",
+					"when": "editorHasSelection"
+				}
+			],
+			"terminal/context": [
+				{
+					"command": "incline.addTerminalOutputToChat",
+					"group": "navigation"
+				}
+			],
+			"scm/title": [
+				{
+					"command": "incline.generateGitCommitMessage",
+					"group": "navigation",
+					"when": "config.git.enabled && scmProvider == git && !incline.isGeneratingCommit"
+				},
+				{
+					"command": "incline.abortGitCommitMessage",
+					"group": "navigation",
+					"when": "config.git.enabled && scmProvider == git && incline.isGeneratingCommit"
+				}
+			],
+			"notebook/toolbar": [
+				{
+					"command": "incline.jupyterGenerateCell",
+					"group": "navigation/add@1",
+					"when": "notebookType == 'jupyter-notebook'"
+				}
+			],
+			"notebook/cell/title": [
+				{
+					"command": "incline.jupyterExplainCell",
+					"group": "inline@1",
+					"when": "notebookType == 'jupyter-notebook'"
+				},
+				{
+					"command": "incline.jupyterImproveCell",
+					"group": "inline@2",
+					"when": "notebookType == 'jupyter-notebook'"
+				}
+			],
+			"commandPalette": [
+				{
+					"command": "incline.generateGitCommitMessage",
+					"when": "config.git.enabled && !incline.isGeneratingCommit"
+				},
+				{
+					"command": "incline.abortGitCommitMessage",
+					"when": "config.git.enabled && incline.isGeneratingCommit"
+				}
+			]
+		},
+		"configuration": {
+			"title": "INCLINE",
+			"properties": {
+				"incline.taskTracker.author": {
+					"type": "string",
+					"default": "me",
+					"description": "Name recorded as the creator/updater when you create or update tasks from the INCLINE Tasks panel. (Writes made through the AI tool are always recorded as \"AI\".)"
+				},
+				"incline.mcp.basePort": {
+					"type": "number",
+					"default": 12340,
+					"minimum": 1024,
+					"maximum": 65400,
+					"description": "First port number to try for the MCP server. If it is in use, the next number is tried (up to 100), so several windows can run at the same time. Enabling the server, allowing session control and debug mode are switched in the INCLINE settings tab. Connection info is in the terminal environment variables INCLINE_MCP_URL / INCLINE_MCP_TOKEN, or in ~/.incline/run/mcp-<port>.json (debug mode only)."
+				},
+				"incline.rateLimit.rpm": {
+					"type": "number",
+					"default": 15,
+					"minimum": 1,
+					"description": "Upper limit of model requests per minute (RPM). Requests are delayed as it gets close. Also used as the limit shown on the gauge. If unset, a per-provider estimate is used (Gemini 10, Ollama / LM Studio effectively unlimited, others 15)."
+				},
+				"incline.rateLimit.tpm": {
+					"type": "number",
+					"default": 200000,
+					"minimum": 1,
+					"description": "Upper limit of tokens per minute (TPM, input + output + cache). Also used as the limit shown on the gauge. If unset, a per-provider estimate is used (Gemini 250k, others 200k)."
+				},
+				"incline.rateLimit.rpd": {
+					"type": "number",
+					"minimum": 1,
+					"description": "Approximate upper limit of model requests per day (RPD), used only for the limit shown on the RPD meter in the task header (requests are not delayed). If unset, only the count is shown."
+				},
+				"incline.rateLimit.minSpacingSec": {
+					"type": "number",
+					"default": 3,
+					"minimum": 0,
+					"description": "Minimum interval between consecutive model requests, in seconds (burst suppression). 0 disables it."
+				},
+				"incline.rateLimit.retryDelaySec": {
+					"type": "number",
+					"default": 60,
+					"minimum": 0,
+					"description": "Seconds to wait before automatically retrying after a rate-limit / quota error. A longer \"retry in Ns\" hint from the server takes precedence."
+				},
+				"incline.rateLimit.maxRetries": {
+					"type": "number",
+					"default": 100,
+					"minimum": 0,
+					"description": "Maximum number of automatic retries (consecutive failures without progress). The count resets as soon as the run makes progress. 0 disables automatic retry."
+				},
+				"incline.rateLimit.toolDelaySec": {
+					"type": "number",
+					"default": 10,
+					"minimum": 0,
+					"description": "Fixed wait before each tool execution, in seconds. Tool execution is local, so it does not contribute to RPM/TPM. 0 disables it."
+				},
+				"incline.tasks.openOnStartup": {
+					"type": "boolean",
+					"default": true,
+					"description": "Open INCLINE Tasks in the right side bar when the window starts, if it is not already visible."
+				},
+				"incline.watchdog.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Watchdog: when the INCLINE agent has been idle while tasks assigned to AI are still in progress, nudge the agent (and post a message to the manager AI) to act or to say what it is waiting for. Stops after a few nudges until the agent becomes active again."
+				},
+				"incline.watchdog.intervalMinutes": {
+					"type": "number",
+					"default": 5,
+					"minimum": 1,
+					"description": "Watchdog interval in minutes: how long the agent must be idle before it is nudged, and how often it is nudged again."
+				},
+				"incline.taskTracker.aiToolEnabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Give the agent the task_tracker tool (read/write task.md). When off, the panel is for humans only. Takes effect from the next session."
+				}
+			}
+		}
+	},
+	"scripts": {
+		"vscode:prepublish": "bun run package",
+		"compile": "bun run check-types && bun run lint && bun esbuild.mjs",
+		"compile-standalone": "bun run check-types && bun run lint && bun esbuild.mjs --standalone",
+		"postcompile-standalone": "node scripts/package-standalone.mjs",
+		"dev": "bun run protos && bun run watch",
+		"watch": "bun run --parallel watch:esbuild watch:tsc",
+		"watch:esbuild": "bun esbuild.mjs --watch",
+		"watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+		"package": "bun run check-types && bun run lint && bun run build:production",
+		"build:production": "bun run build:webview && bun esbuild.mjs --production",
+		"protos": "node scripts/build-proto.mjs",
+		"protos-python": "node scripts/build-python-proto.mjs",
+		"download-ripgrep": "node scripts/download-ripgrep.mjs",
+		"postprotos": "biome format --config-path ./biome.jsonc src/shared/proto src/core/controller src/hosts/ webview-ui/src/services src/generated --write --no-errors-on-unmatched",
+		"clean:build": "rimraf dist dist-standalone webview-ui/build src/generated out/",
+		"clean:deps": "rimraf node_modules webview-ui/node_modules",
+		"clean:all": "bun run clean:build && bun run clean:deps",
+		"compile-tests": "node ./scripts/build-tests.js",
+		"watch-tests": "tsc -p . -w --outDir out",
+		"check-types": "bun run protos && bunx tsc --noEmit && bun run check-types:compat && cd webview-ui && bunx tsc --noEmit",
+		"check-types:compat": "bunx tsc --project tsconfig.vscode-compat.json --noEmit",
+		"lint": "biome lint --config-path ./biome.jsonc --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error && bun run lint:proto",
+		"lint:proto": "bash ./scripts/proto-lint.sh",
+		"analyze:unused": "bunx --yes knip --config knip.json --include files,exports,types,enumMembers,duplicates",
+		"analyze:unused:prod": "bunx --yes knip --config knip.json --production --include files,exports,types,enumMembers,dependencies",
+		"analyze:unused:fix-exports": "node scripts/remove-unused-exports.mjs --apply",
+		"analyze:unused:fix-exports:dry": "node scripts/remove-unused-exports.mjs",
+		"format": "biome format --config-path ./biome.jsonc --changed --since main --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error --semicolons=as-needed",
+		"format:fix": "biome check --config-path ./biome.jsonc --changed --since main --no-errors-on-unmatched --files-ignore-unknown=true --write --semicolons=as-needed",
+		"fix:all": "biome check --config-path ./biome.jsonc --no-errors-on-unmatched --files-ignore-unknown=true --write --diagnostic-level=error --unsafe --semicolons=as-needed",
+		"ci:check-all": "bun run --parallel check-types lint format",
+		"ci:build": "bun run protos && bun run build:webview && bun esbuild.mjs && bun run compile-tests",
+		"pretest": "bun run compile && bun run compile-tests && bun run compile-standalone && bun run lint",
+		"test": "bun run test:unit && bun run test:integration",
+		"test:integration": "bun run compile-tests && vscode-test",
+		"test:unit": "bun scripts/run-bun-unit-tests.ts",
+		"test:vitest": "vitest run --config vitest.config.ts",
+		"test:cloud": "vitest run --config vitest.cloud.config.ts",
+		"test:vitest:watch": "vitest --config vitest.config.ts",
+		"test:bun": "bun scripts/run-bun-tests.ts",
+		"test:bun:unit": "bun scripts/run-bun-unit-tests.ts",
+		"test:coverage": "bun run compile-tests && vscode-test --coverage",
+		"test:sca-server": "bun --watch scripts/test-standalone-core-api-server.ts",
+		"test:tp-orchestrator": "bun scripts/testing-platform-orchestrator.ts",
+		"dev:mcp-oauth-test-server": "bun src/dev/mcp-oauth-test-server/server.ts",
+		"dev:cloud-sessions": "bun src/dev/local-cloud-server.ts",
+		"e2e": "playwright test -c playwright.config.ts",
+		"test:e2e": "bun run build:production && node src/test/e2e/utils/build.mjs && playwright test",
+		"test:e2e:ui": "bun scripts/interactive-playwright.ts",
+		"install:all": "bun install",
+		"dev:webview": "node scripts/clean-webview-vite-cache.mjs && cd webview-ui && bun run dev",
+		"build:webview": "bun run protos && cd webview-ui && bun run build",
+		"test:webview": "cd webview-ui && bun run test",
+		"publish:marketplace": "node scripts/publish-marketplace.mjs",
+		"publish:marketplace:prerelease": "node scripts/publish-marketplace.mjs --pre-release",
+		"publish:marketplace:nightly": "node ./scripts/publish-nightly.mjs",
+		"docs": "cd docs && bun run dev",
+		"docs:check-links": "cd docs && bun run check",
+		"docs:rename-file": "cd docs && bun run rename",
+		"report-issue": "node scripts/report-issue.js",
+		"storybook": "cd webview-ui && bun run storybook",
+		"eval:smoke:run": "bun evals/smoke-tests/run-smoke-tests.ts"
+	},
+	"lint-staged": {
+		"src/shared/storage/state-keys.ts": [
+			"node scripts/generate-state-proto.mjs",
+			"git add apps/vscode/proto/cline/state.proto"
+		],
+		"*": [
+			"biome check --write --staged --no-errors-on-unmatched --files-ignore-unknown=true --semicolons=as-needed"
+		]
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.14",
+		"@bufbuild/buf": "^1.54.0",
+		"@microsoft/tui-test": "0.0.1",
+		"@types/better-sqlite3": "^7.6.13",
+		"@types/chai": "^5.0.1",
+		"@types/clone-deep": "^4.0.4",
+		"@types/get-folder-size": "^3.0.4",
+		"@types/js-yaml": "^4.0.9",
+		"@types/mocha": "^10.0.7",
+		"@types/node": "22.15.1",
+		"@types/pdf-parse": "^1.1.4",
+		"@types/picomatch": "^4.0.2",
+		"@types/shell-quote": "^1.7.5",
+		"@types/should": "^11.2.0",
+		"@types/sinon": "^21.0.0",
+		"@types/turndown": "^5.0.5",
+		"@types/vscode": "1.101.0",
+		"@types/ws": "^8.18.1",
+		"@vscode/test-cli": "^0.0.12",
+		"@vscode/test-electron": "^3.1.0",
+		"@vscode/vsce": "^3.6.0",
+		"c8": "^10.1.3",
+		"chai": "^4.3.10",
+		"chalk": "5.6.2",
+		"dotenv": "^17.2.3",
+		"esbuild": "^0.25.0",
+		"glob": "^11.0.0",
+		"grpc-tools": "^1.13.0",
+		"lint-staged": "^16.1.0",
+		"minimatch": "^3.0.3",
+		"minimist": "^1.2.8",
+		"mocha": "^11.7.4",
+		"playwright": "^1.55.1",
+		"prebuild-install": "^7.1.3",
+		"protoc-gen-ts": "^0.8.7",
+		"rimraf": "^6.0.1",
+		"should": "^13.2.3",
+		"sinon": "^21.0.3",
+		"tar": "^7.5.2",
+		"tree-kill": "^1.2.2",
+		"ts-proto": "^2.6.1",
+		"tsconfig-paths": "^4.2.0",
+		"typescript": "^5.4.5",
+		"vitest": "^4.0.17",
+		"ws": "^8.20.0"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.37.0",
+		"@bufbuild/protobuf": "^2.2.5",
+		"@cline/agents": "workspace:*",
+		"@cline/core": "workspace:*",
+		"@cline/llms": "workspace:*",
+		"@cline/shared": "workspace:*",
+		"@google/genai": "^1.30.0",
+		"@grpc/grpc-js": "^1.9.15",
+		"@grpc/proto-loader": "^0.7.13",
+		"@grpc/reflection": "^1.0.4",
+		"@modelcontextprotocol/sdk": "^1.25.1",
+		"@opentelemetry/api": "^1.9.0",
+		"@opentelemetry/api-logs": "^0.56.0",
+		"@opentelemetry/core": "^2.1.0",
+		"@opentelemetry/exporter-logs-otlp-grpc": "^0.56.0",
+		"@opentelemetry/exporter-logs-otlp-http": "^0.56.0",
+		"@opentelemetry/exporter-logs-otlp-proto": "^0.56.0",
+		"@opentelemetry/exporter-metrics-otlp-grpc": "^0.56.0",
+		"@opentelemetry/exporter-metrics-otlp-http": "^0.56.0",
+		"@opentelemetry/exporter-metrics-otlp-proto": "^0.56.0",
+		"@opentelemetry/exporter-trace-otlp-grpc": "^0.56.0",
+		"@opentelemetry/exporter-trace-otlp-http": "^0.56.0",
+		"@opentelemetry/exporter-trace-otlp-proto": "^0.56.0",
+		"@opentelemetry/resources": "^1.30.1",
+		"@opentelemetry/sdk-logs": "^0.56.0",
+		"@opentelemetry/sdk-metrics": "^1.30.1",
+		"@opentelemetry/sdk-trace-node": "^1.30.1",
+		"@opentelemetry/semantic-conventions": "^1.37.0",
+		"@playwright/test": "^1.55.1",
+		"@streamparser/json": "^0.0.22",
+		"@tailwindcss/vite": "^4.1.14",
+		"@types/uuid": "^10.0.0",
+		"@vscode/codicons": "^0.0.36",
+		"archiver": "^7.0.1",
+		"aws4fetch": "^1.0.20",
+		"axios": "1.20.0",
+		"better-sqlite3": "^12.4.1",
+		"cheerio": "^1.0.0",
+		"chokidar": "^4.0.1",
+		"chrome-launcher": "^1.1.2",
+		"clone-deep": "^4.0.1",
+		"default-shell": "^2.2.0",
+		"diff": "8.0.4",
+		"exceljs": "^4.4.0",
+		"execa": "^9.5.2",
+		"fast-deep-equal": "^3.1.3",
+		"fzf": "^0.5.2",
+		"get-folder-size": "^5.0.0",
+		"globby": "^14.0.2",
+		"grpc-health-check": "^2.0.2",
+		"iconv-lite": "^0.6.3",
+		"ignore": "^7.0.3",
+		"image-size": "^2.0.2",
+		"isbinaryfile": "^5.0.2",
+		"js-yaml": "^4.3.2",
+		"jschardet": "^3.1.4",
+		"json5": "^2.2.3",
+		"jwt-decode": "^4.0.0",
+		"mammoth": "^1.11.0",
+		"nanoid": "^5.1.6",
+		"nice-grpc": "^2.1.12",
+		"nice-grpc-common": "^2.0.3",
+		"node-machine-id": "^1.1.12",
+		"open": "^10.1.2",
+		"open-graph-scraper": "^6.9.0",
+		"openai": "^6.21.0",
+		"os-name": "^6.0.0",
+		"p-mutex": "^1.0.0",
+		"p-timeout": "^6.1.4",
+		"p-wait-for": "^5.0.2",
+		"pdf-parse": "^1.1.1",
+		"picomatch": "^4.0.3",
+		"posthog-node": "^5.8.0",
+		"puppeteer-chromium-resolver": "^23.0.0",
+		"puppeteer-core": "^23.4.0",
+		"reconnecting-eventsource": "^1.6.4",
+		"serialize-error": "^11.0.3",
+		"shell-quote": "^1.8.3",
+		"simple-git": "3.36.0",
+		"strip-ansi": "^7.1.2",
+		"tailwindcss": "^4.1.14",
+		"ts-morph": "^25.0.1",
+		"turndown": "^7.2.0",
+		"ulid": "^2.4.0",
+		"undici": "^7.29.0",
+		"uuid": "^11.1.0",
+		"vscode-uri": "^3.1.0",
+		"zod": "^4.3.6"
+	},
+	"c8": {
+		"reporter": [
+			"lcov",
+			"html"
+		],
+		"exclude": [
+			"**/testing-platform/**",
+			"**/webview-ui/**",
+			"**/.vscode-test/**",
+			"**/node_modules/**",
+			"node_modules",
+			"**/dist-standalone/src/**",
+			"**/dist-standalone/vsce-extension/https:/**",
+			"**/dist-standalone/vsce-extension/**",
+			"**/dist-standalone/https:/**",
+			"**/dist-standalone/LIB/src/**",
+			"**/dist-standalone/pdfjs-dist/**",
+			"**/*.d.ts",
+			"**/*.{test,spec}.{js,jsx,ts,tsx,mjs,cjs}",
+			"**/__tests__/**",
+			"**/test/**",
+			"**/tests/**",
+			"**/.nyc_output/**",
+			"**/tests-results/**",
+			"src/test/**",
+			"**/src/xml/**",
+			"**/standalone/**",
+			"**/src/generated/**",
+			"dist"
+		],
+		"all": true,
+		"exclude-after-remap": true
+	}
+}

@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Call the INCLINE MCP server of a VS Code window from the command line (stdlib only).
+
+Usage:
+  scripts/incline-mcp tools                      # list the tools
+  scripts/incline-mcp call task_list '{}'        # call a tool with JSON arguments
+  scripts/incline-mcp call task_note '{"id": 12, "text": "progress"}'
+
+Where the connection info comes from (first match wins):
+  1. INCLINE_MCP_URL / INCLINE_MCP_TOKEN environment variables (standard mode). INCLINE sets them in the
+     VS Code window's extension host, so a Claude Code session started in that window inherits them.
+     If they are missing, start a new Claude session / open a new terminal in that window.
+  2. ~/.incline/run/mcp-<port>.json (debug mode only; lets another VS Code window or an external process
+     connect). The file whose "workspace" equals --workspace (default: the current directory) is used.
+"""
+import glob
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+
+def connection(workspace):
+    url, token = os.environ.get("INCLINE_MCP_URL"), os.environ.get("INCLINE_MCP_TOKEN")
+    if url and token:
+        return url, token
+    run_dir = os.path.join(os.environ.get("INCLINE_DIR") or os.path.expanduser("~/.incline"), "run")
+    for path in sorted(glob.glob(os.path.join(run_dir, "mcp-*.json"))):
+        try:
+            info = json.load(open(path))
+        except (OSError, ValueError):
+            continue
+        if os.path.realpath(info.get("workspace", "")) == os.path.realpath(workspace):
+            return info["url"], info["token"]
+    sys.exit(
+        "No INCLINE MCP connection found.\n"
+        "- Standard mode: INCLINE_MCP_URL / INCLINE_MCP_TOKEN are set for processes started AFTER INCLINE activated "
+        "in this window. Start a new Claude session / terminal in the INCLINE window.\n"
+        "- Another window or an external process: turn on 'Debug mode' in the INCLINE settings tab "
+        "(it writes ~/.incline/run/mcp-<port>.json)."
+    )
+
+
+def rpc(url, token, method, params=None):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, **({"params": params} if params else {})}).encode()
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+    )
+    try:
+        raw = urllib.request.urlopen(req, timeout=660).read().decode()
+    except urllib.error.HTTPError as e:
+        sys.exit("HTTP %d from INCLINE MCP (%s)" % (e.code, "bad token: reload / restart the session" if e.code == 401 else e.reason))
+    except urllib.error.URLError as e:
+        sys.exit("Cannot reach INCLINE MCP: %s (is MCP enabled in the INCLINE settings tab?)" % e.reason)
+    m = re.search(r"^data: (.*)$", raw, re.M)
+    return json.loads(m.group(1) if m else raw)
+
+
+def main(argv):
+    workspace = os.getcwd()
+    if "--workspace" in argv:
+        i = argv.index("--workspace")
+        workspace = argv[i + 1]
+        del argv[i : i + 2]
+    if not argv or argv[0] not in ("tools", "call"):
+        sys.exit(__doc__)
+    url, token = connection(workspace)
+    if argv[0] == "tools":
+        for t in rpc(url, token, "tools/list")["result"]["tools"]:
+            print("%s - %s" % (t["name"], t.get("description", "").split(". ")[0]))
+        return
+    if len(argv) < 2:
+        sys.exit(__doc__)
+    args = json.loads(argv[2]) if len(argv) > 2 else {}
+    result = rpc(url, token, "tools/call", {"name": argv[1], "arguments": args})
+    if "error" in result:
+        sys.exit(json.dumps(result["error"], ensure_ascii=False))
+    for c in result["result"]["content"]:
+        print(c.get("text", ""))
+    if result["result"].get("isError"):
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -1,0 +1,9 @@
+INCLINE
+Copyright 2026 TK-Developer-OSS
+
+INCLINE is an unofficial fork of Cline (https://github.com/cline/cline),
+Copyright 2026 Cline Bot Inc., licensed under the Apache License 2.0.
+It is not affiliated with, endorsed by, or supported by Cline Bot Inc.
+Modifications: request throttling, RPM/TPM display, Incline Tasks panel,
+text tool-call recovery, separated data directory (~/.incline),
+disabled Cline cloud backend, and a first-run terms-of-use screen.

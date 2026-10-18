@@ -1,0 +1,517 @@
+import {
+	RATE_LIMIT_MAX_WAIT_MS,
+	PROVIDER_RATE_LIMIT_DEFAULTS,
+	RATE_LIMIT_MIN_SPACING_MS,
+	RATE_LIMIT_RPM,
+	RATE_LIMIT_TPM,
+	RATE_LIMIT_WINDOW_MS,
+} from "@/shared/rate-limits"
+import { Logger } from "@/shared/services/Logger"
+
+function inclineTimestamp(date: Date = new Date()): string {
+	const p = (n: number, w = 2) => String(n).padStart(w, "0")
+	return (
+		`${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ` +
+		`${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}.${p(date.getMilliseconds(), 3)}`
+	)
+}
+
+// 簡易的な強制ウェイト方式のレートリミッター。
+// RPM (Requests Per Minute) / TPM (Tokens Per Minute) 回避のため、
+// 指定した時間だけ無条件に待機する。
+//
+// スロットリングポイントごとに独立したインスタンスを持ち、待機時間を
+// 個別に調整できる。暫定はコード内固定 (10秒)。最終的には AIモデル設定
+// コンパネから updateMinDelay() で動的に変更する想定。
+
+// vitest / mocha / e2e 実行時は強制ウェイトを無効化する (テストが10秒×回数
+// ぶん遅くなるのを防ぐ)。VITEST は Vitest が自動設定、IS_TEST/E2E_TEST は
+// このリポジトリの既存テスト規約 (otel-config.ts / posthog-config.ts 参照)。
+const IS_TEST_ENV =
+	process.env.VITEST === "true" ||
+	process.env.NODE_ENV === "test" ||
+	process.env.IS_TEST === "true" ||
+	process.env.E2E_TEST === "true"
+
+export class ApiRateLimiter {
+	private lastRequestTime: number = 0;
+	private minDelayMs: number;
+
+	constructor(minDelayMs: number = 10000) {
+		this.minDelayMs = minDelayMs;
+	}
+
+	// 将来的にAI設定画面から動的に変更できるようにする
+	public updateMinDelay(newMinDelayMs: number): void {
+		this.minDelayMs = newMinDelayMs;
+	}
+
+	public getMinDelay(): number {
+		return this.minDelayMs;
+	}
+
+	private getTimestamp(): string {
+		const now = new Date();
+		return (
+			now.getFullYear() +
+			"-" +
+			String(now.getMonth() + 1).padStart(2, "0") +
+			"-" +
+			String(now.getDate()).padStart(2, "0") +
+			" " +
+			String(now.getHours()).padStart(2, "0") +
+			":" +
+			String(now.getMinutes()).padStart(2, "0") +
+			":" +
+			String(now.getSeconds()).padStart(2, "0") +
+			"." +
+			String(now.getMilliseconds()).padStart(3, "0")
+		);
+	}
+
+	public async wait(callerName: string = "unknown"): Promise<void> {
+		const delayRequired = this.minDelayMs; // 常に設定時間分待機
+
+		// 待機不要のケース (テスト環境 / 遅延0以下で無効化) は即リターン
+		if (IS_TEST_ENV || delayRequired <= 0) {
+			return;
+		}
+
+		// 強制的に指定時間待機させる（呼び出し元関数名を含む）
+		const logMsg = `[INCLINE] [${this.getTimestamp()}] RateLimiter active [${callerName}]: FORCED WAIT ${delayRequired}ms`;
+		Logger.log(logMsg);
+		process.stderr.write(logMsg + "\n");
+
+		await new Promise((resolve) => setTimeout(resolve, delayRequired));
+
+		this.lastRequestTime = Date.now();
+	}
+}
+
+// --- スロットリングポイント別インスタンス ---------------------------------
+// 待機時間 (ms)。暫定コード内固定。最終的には AIモデル設定コンパネから制御する。
+export const RATE_LIMIT_DEFAULT_DELAY_MS = 10000
+
+/**
+ * 各モデル(LLM)リクエスト前 (AgentRuntime.beforeModel フック) と、ファイル
+ * ベースのフックイベント dispatch 前 (VscodeSessionHost.handleHookEvent) に
+ * 効かせる共有インスタンス。「1ターン1回」ではなくエージェントループの
+ * 反復ごと (= モデルリクエストごと) に待機する。
+ */
+export const modelRequestRateLimiter = new ApiRateLimiter(RATE_LIMIT_DEFAULT_DELAY_MS)
+
+/**
+ * [A] 各ツール実行前 (AgentRuntime.beforeTool フック) に効かせるインスタンス。
+ * 人間目線の「アクション」単位 (ファイル読み・コマンド実行など) の強制ウェイト。
+ * modelRequestRateLimiter とは独立に待機時間を設定できる。
+ *
+ * [B] エージェントライフサイクルイベントごとの強制ウェイト (onEvent フックを
+ * turn-started / assistant-message / tool-started / tool-finished / turn-finished
+ * に絞って適用) は未実装。incline.md の残タスク参照。実装時はここに
+ * lifecycleEventRateLimiter を追加し、A とは別パラメータで制御する。
+ */
+export const toolExecutionRateLimiter = new ApiRateLimiter(RATE_LIMIT_DEFAULT_DELAY_MS)
+
+// --- 動的 RPM/TPM スロットリング (beforeModel 用) ------------------------
+// 固定ウェイトではなく、直近60秒のリクエスト数 / トークン数が目安上限に
+// 近づいたときだけ必要なぶん待つスライディングウィンドウ方式。
+//  - リクエスト時刻は acquire() で記録 (RPM)
+//  - トークン数は recordUsage() で記録 (TPM) — usage イベントから per-turn 値を渡す
+//    (sdk-session-event-coordinator.ts が投入する)
+
+export interface UsageSnapshot {
+	rpm: number
+	tpm: number
+	rpd: number
+	/** この値を作った時刻 (ホストの epoch ms)。 */
+	at: number
+	/** 直近60秒のリクエスト時刻。 */
+	reqs: number[]
+	/** 直近60秒のトークン使用量。 */
+	tokens: { at: number; tokens: number }[]
+}
+
+interface TokenSample {
+	at: number
+	tokens: number
+}
+
+export class SlidingWindowModelRateLimiter {
+	private reqTimes: number[] = []
+	private tokenSamples: TokenSample[] = []
+	/** 直近のリクエストの総トークン (次の入力の目安) と、まだ実績に載っていないツール結果の見積もり (#121)。 */
+	private lastRequestTokens = 0
+	private pendingTokens = 0
+
+	// 表示用の使用量 (セッション単位)。スロットリング用の reqTimes / tokenSamples とは別に
+	// 持ち、セッションを切り替えたら表示だけリセットする (実際の待機制御には影響しない)。
+	private viewSessionId: string | undefined
+	private viewReqs: number[] = []
+	private viewTokens: TokenSample[] = []
+	private rpd: number | undefined
+
+	private rpm = RATE_LIMIT_RPM
+	private tpm = RATE_LIMIT_TPM
+	private minSpacingMs = RATE_LIMIT_MIN_SPACING_MS
+	private readonly windowMs = RATE_LIMIT_WINDOW_MS
+	private readonly maxWaitMs = RATE_LIMIT_MAX_WAIT_MS
+
+	/** 将来 AIモデル設定コンパネから上限を差し替える用。 */
+	public updateLimits(opts: { rpm?: number; tpm?: number; minSpacingMs?: number; rpd?: number | null }): void {
+		if (opts.rpd === null) {
+			this.rpd = undefined
+		} else if (typeof opts.rpd === "number" && opts.rpd > 0) {
+			this.rpd = opts.rpd
+		}
+		if (typeof opts.rpm === "number" && opts.rpm > 0) {
+			this.rpm = opts.rpm
+		}
+		if (typeof opts.tpm === "number" && opts.tpm > 0) {
+			this.tpm = opts.tpm
+		}
+		if (typeof opts.minSpacingMs === "number" && opts.minSpacingMs >= 0) {
+			this.minSpacingMs = opts.minSpacingMs
+		}
+	}
+
+	/** 現在の RPM / TPM 上限 (ゲージ表示用)。 */
+	public getLimits(): { rpm: number; tpm: number; rpd?: number } {
+		return { rpm: this.rpm, tpm: this.tpm, ...(this.rpd ? { rpd: this.rpd } : {}) }
+	}
+
+	/**
+	 * 表示用メーターの対象セッションを切り替える。変わったら表示用の集計をリセットする
+	 * (スロットリングの状態は保持)。
+	 */
+	public setViewSession(sessionId: string | undefined): void {
+		if (sessionId === this.viewSessionId) {
+			return
+		}
+		this.viewSessionId = sessionId
+		this.viewReqs = []
+		this.viewTokens = []
+	}
+
+	/**
+	 * 表示用の使用量 + 直近60秒のサンプル (リクエスト時刻 / トークン)。webview はサンプルから
+	 * 毎秒メーターを計算し直し、60秒の窓から古い分が抜けていく動きを滑らかに見せる (#77)。
+	 */
+	public usageSnapshot(now: number = Date.now()): UsageSnapshot {
+		const base = this.usageView(now)
+		const minCutoff = now - this.windowMs
+		return {
+			...base,
+			at: now,
+			reqs: this.viewReqs.filter((t) => t >= minCutoff),
+			tokens: this.viewTokens.filter((s) => s.at >= minCutoff).map((s) => ({ at: s.at, tokens: s.tokens })),
+		}
+	}
+
+	/** 表示用の使用量: 直近60秒の RPM / TPM と、直近24時間の RPD (現在のセッション分)。 */
+	public usageView(now: number = Date.now()): { rpm: number; tpm: number; rpd: number } {
+		const dayCutoff = now - 24 * 60 * 60 * 1000
+		while (this.viewReqs.length > 0 && this.viewReqs[0] < dayCutoff) {
+			this.viewReqs.shift()
+		}
+		const minCutoff = now - this.windowMs
+		while (this.viewTokens.length > 0 && this.viewTokens[0].at < minCutoff) {
+			this.viewTokens.shift()
+		}
+		const rpm = this.viewReqs.filter((t) => t >= minCutoff).length
+		const tpm = this.viewTokens.reduce((sum, s) => sum + s.tokens, 0)
+		return { rpm, tpm, rpd: this.viewReqs.length }
+	}
+
+	/** モデルレスポンスの per-turn トークン使用量を記録する (TPM 計算用)。 */
+	public recordUsage(tokens: number, at: number = Date.now()): void {
+		if (Number.isFinite(tokens) && tokens > 0) {
+			this.tokenSamples.push({ at, tokens })
+			this.viewTokens.push({ at, tokens })
+			// 実績が届いたので、それまでの見積もり (予約) は実績に置き換わった。直近のリクエストの大きさは、次の入力の目安になる。
+			this.lastRequestTokens = tokens
+			this.pendingTokens = 0
+		}
+	}
+
+	/**
+	 * アクション (ツール実行) の結果のトークン量の見積もりを『予約』する (#121)。ツール結果のトークンは、次のモデルリクエストの
+	 * 入力になって初めて usage に載る (実績の記録はそのリクエストの後) ので、記録を待つと、大きな結果を送った直後に枠を超える。
+	 * 予約した分は、次の computeWaitMs の予測に含まれ、次の実績 (recordUsage) が届くと消える。
+	 */
+	public reservePending(tokens: number): void {
+		if (Number.isFinite(tokens) && tokens > 0) {
+			this.pendingTokens = Math.min(this.pendingTokens + Math.ceil(tokens), 10_000_000)
+		}
+	}
+
+	/** 次のモデルリクエストが TPM に足す量の予測: 直近のリクエストの大きさ (文脈はほぼ引き継がれる) + 予約したツール結果。 */
+	private predictNextRequestTokens(): number {
+		return Math.min(this.lastRequestTokens + this.pendingTokens, this.tpm)
+	}
+
+	/** 手動でリクエスト時刻を記録 (テスト用)。 */
+	public noteRequest(at: number = Date.now()): void {
+		this.reqTimes.push(at)
+		this.viewReqs.push(at)
+	}
+
+	private prune(now: number): void {
+		const cutoff = now - this.windowMs
+		while (this.reqTimes.length > 0 && this.reqTimes[0] < cutoff) {
+			this.reqTimes.shift()
+		}
+		while (this.tokenSamples.length > 0 && this.tokenSamples[0].at < cutoff) {
+			this.tokenSamples.shift()
+		}
+	}
+
+	private tokenSum(): number {
+		let sum = 0
+		for (const s of this.tokenSamples) {
+			sum += s.tokens
+		}
+		return sum
+	}
+
+	/** 直近ウィンドウの使用状況 (デバッグ / 表示用)。副作用として prune する。 */
+	public snapshot(now: number = Date.now()): { rpmUsed: number; tpmUsed: number; rpmLimit: number; tpmLimit: number } {
+		this.prune(now)
+		return { rpmUsed: this.reqTimes.length, tpmUsed: this.tokenSum(), rpmLimit: this.rpm, tpmLimit: this.tpm }
+	}
+
+	/**
+	 * 次のモデルリクエストまでに必要な待機時間 (ms) と理由。副作用として prune する
+	 * が reqTimes には積まない (acquire() が積む)。
+	 */
+	public computeWaitMs(now: number = Date.now()): { waitMs: number; reasons: string[] } {
+		this.prune(now)
+		let waitMs = 0
+		const reasons: string[] = []
+
+		// RPM: ウィンドウ内リクエスト数が上限以上なら、枠が空くまで待つ
+		if (this.reqTimes.length >= this.rpm) {
+			const idx = Math.max(0, this.reqTimes.length - this.rpm)
+			const freeAt = this.reqTimes[idx] + this.windowMs
+			waitMs = Math.max(waitMs, freeAt - now)
+			reasons.push(`RPM ${this.reqTimes.length}/${this.rpm}`)
+		}
+
+		// TPM: ウィンドウ内トークン数 + 次のリクエストの予測 (直近のリクエストの大きさ + 予約したツール結果) が上限を超えるなら、
+		// 古いサンプルが十分抜けるまで待つ。予測を足さないと『今は上限未満』で送って、そのリクエスト自体が枠を超える (#121)。
+		const sum = this.tokenSum()
+		const next = this.predictNextRequestTokens()
+		if (sum + next >= this.tpm && sum > 0 && this.tokenSamples.length > 0) {
+			let running = sum
+			let freeAt = now
+			for (const s of this.tokenSamples) {
+				running -= s.tokens
+				if (running + next < this.tpm) {
+					freeAt = s.at + this.windowMs
+					break
+				}
+				freeAt = s.at + this.windowMs
+			}
+			waitMs = Math.max(waitMs, freeAt - now)
+			reasons.push(next > 0 && sum < this.tpm ? `TPM ${sum}+next ${next}/${this.tpm}` : `TPM ${sum}/${this.tpm}`)
+		}
+
+		// 最低スペーシング
+		if (this.minSpacingMs > 0 && this.reqTimes.length > 0) {
+			const sinceLast = now - this.reqTimes[this.reqTimes.length - 1]
+			const w = this.minSpacingMs - sinceLast
+			if (w > waitMs) {
+				waitMs = w
+				if (reasons.length === 0) {
+					reasons.push("min-spacing")
+				}
+			}
+		}
+
+		waitMs = Math.min(Math.max(0, Math.ceil(waitMs)), this.maxWaitMs)
+		return { waitMs, reasons }
+	}
+
+	/** モデルリクエスト直前に呼ぶ。必要なら待ち、リクエスト時刻を記録する。 */
+	public async acquire(callerName: string = "unknown"): Promise<void> {
+		const { waitMs, reasons } = this.computeWaitMs()
+
+		if (waitMs > 0 && !IS_TEST_ENV) {
+			const msg = `[INCLINE] [${inclineTimestamp()}] RateLimiter dynamic [${callerName}]: WAIT ${waitMs}ms (${reasons.join(", ") || "spacing"})`
+			Logger.log(msg)
+			process.stderr.write(`${msg}\n`)
+			await new Promise((resolve) => setTimeout(resolve, waitMs))
+		}
+		this.noteRequest()
+	}
+}
+
+/** 文字列のトークン数の概算: ASCII は 4 文字 ≈ 1 トークン、それ以外 (日本語など) は 1 文字 ≈ 1 トークン (多めに見る)。 */
+export function estimateTokensFromText(text: string): number {
+	let ascii = 0
+	let other = 0
+	for (let i = 0; i < text.length; i++) {
+		if (text.charCodeAt(i) < 128) {
+			ascii++
+		} else {
+			other++
+		}
+	}
+	return Math.ceil(ascii / 4) + other
+}
+
+/** 各モデルリクエスト前 (beforeModel フック) の動的 RPM/TPM スロットリング。 */
+export const dynamicModelRateLimiter = new SlidingWindowModelRateLimiter()
+
+// --- レート制限 / クォータ超過エラー時の自動リトライ ---------------------
+// プロバイダから 429 / RESOURCE_EXHAUSTED / "exceeded your current quota" や、
+// 一時的な高負荷 ("experiencing high demand" / "overloaded" / "try again later" /
+// 5xx) が返ってターンが失敗したとき、一定時間待ってから自動でターンを再開する。
+// 暫定は固定60秒・最大100回。最終的には AIモデル設定コンパネから制御する。
+
+/** リトライまでの待機時間 (ms)。既定60秒。 */
+export const RATE_LIMIT_RETRY_DELAY_MS = 60_000
+/**
+ * 自動リトライの最大回数 (進捗なしの連続失敗)。超えたらエラーをそのまま UI に出す。
+ * 無料枠が極端に絞られたモデル (gemini-3.7-flash 等: limit 20) でも粘れるよう多め。
+ * 途中で1イテレーションでも前進すればカウントは 0 に戻るので実質もっと粘る。
+ */
+export const RATE_LIMIT_MAX_RETRIES = 100
+// --- ユーザー設定 (incline.rateLimit.*) による上書き -----------------------
+// 既定値は上の定数。applyRateLimitSettings() で実行中に差し替えられる。
+let retryDelayMs = RATE_LIMIT_RETRY_DELAY_MS
+let maxRetries = RATE_LIMIT_MAX_RETRIES
+
+/** 現在の自動リトライ最大回数。 */
+export function getRateLimitMaxRetries(): number {
+	return maxRetries
+}
+
+/** 現在の自動リトライ待機時間 (ms)。 */
+export function getRateLimitRetryDelayMs(): number {
+	return retryDelayMs
+}
+
+export interface RateLimitSettings {
+	rpm?: number
+	tpm?: number
+	/** 1日あたりのリクエスト数の目安上限 (メーター表示用。未設定なら上限なし)。 */
+	rpd?: number
+	minSpacingSec?: number
+	retryDelaySec?: number
+	maxRetries?: number
+	toolDelaySec?: number
+}
+
+// 明示設定 (incline.rateLimit.*) > プロバイダ別既定 > 汎用既定 の順で有効値を決める。
+let userSettings: RateLimitSettings = {}
+let activeProviderId: string | undefined
+
+const pos = (n: number | undefined): number | undefined =>
+	typeof n === "number" && Number.isFinite(n) && n > 0 ? n : undefined
+const nonNeg = (n: number | undefined): number | undefined =>
+	typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : undefined
+
+function recomputeLimits(): void {
+	const prov = (activeProviderId && PROVIDER_RATE_LIMIT_DEFAULTS[activeProviderId]) || {}
+	dynamicModelRateLimiter.updateLimits({
+		rpm: pos(userSettings.rpm) ?? pos(prov.rpm) ?? RATE_LIMIT_RPM,
+		tpm: pos(userSettings.tpm) ?? pos(prov.tpm) ?? RATE_LIMIT_TPM,
+		minSpacingMs: (nonNeg(userSettings.minSpacingSec) ?? nonNeg(prov.minSpacingSec) ?? RATE_LIMIT_MIN_SPACING_MS / 1000) * 1000,
+		rpd: pos(userSettings.rpd) ?? null,
+	})
+}
+
+/**
+ * ユーザー設定を反映する。明示していない項目 (undefined / 不正値) はプロバイダ別既定、
+ * それも無ければ汎用既定になる (設定を消したら既定に戻る)。
+ */
+export function applyRateLimitSettings(s: RateLimitSettings): void {
+	userSettings = { ...s }
+	recomputeLimits()
+	retryDelayMs = (nonNeg(s.retryDelaySec) ?? RATE_LIMIT_RETRY_DELAY_MS / 1000) * 1000
+	maxRetries = Math.floor(nonNeg(s.maxRetries) ?? RATE_LIMIT_MAX_RETRIES)
+	toolExecutionRateLimiter.updateMinDelay((nonNeg(s.toolDelaySec) ?? RATE_LIMIT_DEFAULT_DELAY_MS / 1000) * 1000)
+}
+
+/**
+ * 使用中のプロバイダを伝えて、RPM/TPM/最低間隔の既定をそのプロバイダの目安に切り替える。
+ * モデルリクエスト前に毎回呼んでよい (変わっていなければ何もしない)。
+ */
+export function setActiveRateLimitProvider(providerId: string | undefined): void {
+	if (providerId === activeProviderId) {
+		return
+	}
+	activeProviderId = providerId
+	recomputeLimits()
+}
+
+/**
+ * 再開プロンプト。元のユーザーメッセージはセッション履歴に残っているので
+ * 再送しない (SDK の Retry ボタンと同じ挙動: TASK_RESUMPTION_PROMPT)。
+ */
+export const RATE_LIMIT_RETRY_PROMPT = "[TASK RESUMPTION] Please continue where you left off."
+
+// レート制限 / クォータ超過に加え、一時的なプロバイダ側エラー (高負荷・過負荷・
+// 一時的に利用不可・5xx) も「待って再試行すれば直る」類として自動リトライ対象にする。
+const RETRYABLE_PROVIDER_ERROR_PATTERN =
+	/resource_exhausted|exceeded your current quota|quota exceeded|rate.?limit|too many requests|\b429\b|please retry in|experiencing high demand|high demand|overloaded|try again later|temporarily unavailable|currently unavailable|service (is )?unavailable|\b50[234]\b/i
+
+/**
+ * ターン結果テキスト等が「待てば直る」類のプロバイダエラー
+ * (レート制限 / クォータ超過 / 高負荷 / 一時的な 5xx) を示すか。
+ * 名前は歴史的経緯で `isRateLimitErrorText` のまま。
+ */
+export function isRateLimitErrorText(text: string | undefined | null): boolean {
+	return typeof text === "string" && RETRYABLE_PROVIDER_ERROR_PATTERN.test(text) && !isDailyQuotaErrorText(text)
+}
+
+// Incline (#121): 1 日あたりの枠 (RPD) が尽きたことを示す文面。Gemini は quotaId に
+// "GenerateRequestsPerDayPerProjectPerModel-FreeTier" のように PerDay を含める。
+// 日次の枠は待っても (数分〜数時間では) 戻らないので、自動リトライせず人に知らせる。
+const DAILY_QUOTA_PATTERN = /per.?day|requests per day|daily (quota|limit)/i
+const QUOTA_CONTEXT_PATTERN = /quota|resource.?exhausted|rate.?limit|\b429\b/i
+
+export function isDailyQuotaErrorText(text: string | undefined | null): boolean {
+	return typeof text === "string" && QUOTA_CONTEXT_PATTERN.test(text) && DAILY_QUOTA_PATTERN.test(text)
+}
+
+/** "Please retry in 27.951873488s" → 27952 (ms)。見つからなければ undefined。 */
+export function parseRetryAfterMs(text: string | undefined | null): number | undefined {
+	if (typeof text !== "string") {
+		return undefined
+	}
+	const match = text.match(/retry in\s+([0-9]+(?:\.[0-9]+)?)\s*s/i)
+	if (!match) {
+		return undefined
+	}
+	const seconds = Number.parseFloat(match[1])
+	return Number.isFinite(seconds) ? Math.ceil(seconds * 1000) : undefined
+}
+
+/**
+ * 自動リトライ前の待機時間 (ms)。既定は固定120秒だが、サーバーの
+ * "retry in Ns" ヒントの方が長ければそちらを尊重する。テスト環境では 0。
+ */
+export function rateLimitRetryDelayMs(text: string | undefined | null): number {
+	if (IS_TEST_ENV) {
+		return 0
+	}
+	return Math.max(retryDelayMs, parseRetryAfterMs(text) ?? 0)
+}
+
+export function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * 直前の自動リトライ (再開ターン) が実際に処理を進めたか。
+ * モデルが1トークンでも出力した / ツールを1回でも実行したなら「進捗あり」とみなす。
+ * 進捗があった後にまたレート制限に当たった場合は連続失敗カウントをリセットし、
+ * 「少し進んでまた429」を繰り返しても打ち切られないようにする。
+ */
+export function retryRunMadeProgress(result: { usage?: { outputTokens?: number }; toolCalls?: unknown[] } | undefined): boolean {
+	if (!result) {
+		return false
+	}
+	return (result.usage?.outputTokens ?? 0) > 0 || (result.toolCalls?.length ?? 0) > 0
+}
