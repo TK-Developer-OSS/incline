@@ -1,0 +1,119 @@
+out
+dist
+dist-standalone
+node_modules
+tmp
+.vscode-test/
+*.vsix
+
+.DS_Store
+.idea
+.husky/_/
+
+pnpm-lock.yaml
+
+.clineignore
+.cline/enterprise
+.cline/remote-config
+**/.cline/remote-config
+.venv
+.actrc
+CLAUDE.local.md
+
+apps/vscode/webview-ui/src/**/*.js
+apps/vscode/webview-ui/src/**/*.js.map
+
+# Ignore coverage directories and files
+coverage
+coverage-unit
+.nyc_output
+# But don't ignore the coverage scripts in .github/scripts/
+!.github/scripts/coverage/
+
+*evals.env
+.env
+.secrets
+.github/act/.secrets
+
+.worktrees
+
+## Generated files ##
+apps/vscode/src/generated/
+apps/vscode/src/shared/proto/
+apps/vscode/webview-ui/src/services/grpc-client.ts
+*.tsbuildinfo
+
+# E2E Tests
+test-results
+
+/.github/act
+/pkg
+.secrets
+
+*.tsbuildinfo
+
+# Smoke test results (generated)
+evals/smoke-tests/results/
+
+.tui-test
+secrets.json
+tui-traces
+tests/**/cache
+
+# Backup created by scripts/marketplace-readme.mjs while publishing.
+# Should never be committed: only exists if a publish aborts mid-swap.
+.README.github.bak
+
+# Tauri generated code
+apps/*/src-tauri/gen
+apps/*/src-tauri/bin
+apps/examples/*/src-tauri/gen
+apps/examples/*/src-tauri/bin
+# Tauri UI test snapshots
+apps/*/src/tests/.tui-test
+apps/*/src/tests/tui-traces
+apps/vscode/webview-ui/src/**/*.js
+apps/vscode/webview-ui/src/**/*.js.map
+
+
+# SDK Session files / User data
+.cline/data
+.cline/tmp
+*.db
+*.db-shm
+*.db-wal
+.cline/**/managed.json
+.cline/**/bundle.json
+apps/vscode/tsconfig.test.generated.json
+.next/dev/static
+**/src-tauri/target/debug/.fingerprint
+apps/examples/desktop-app/src-tauri/target
+apps/examples/desktop-app/src-tauri/dmg/background.gen.tiff
+apps/examples/desktop-app/webview/.next
+
+# Next.js generated type shim (churns between dev and build)
+apps/examples/desktop-app/webview/next-env.d.ts
+apps/examples/desktop-app/.cursor/settings.json
+
+# ローカルのバックアップ類
+node_modules_*/
+.git____/
+*.md____
+build.log
+
+.claude/settings.local.json
+
+# AWS CodeBuild ビルド関連 (ローカル専用。スキル・メモリには残す)
+buildspec.yml
+scripts/aws/
+Makefile.aws
+.claude/skills/aws-codebuild/
+
+# ルート直下の画像 (アイコン原稿など) は公開しない
+/*.png
+
+# task.md の排他制御用ファイル (INCLINE が作る一時ファイル)
+task.md.lock
+task.md.*.tmp
+.task-order.json
+.task-order.json

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#111111" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<title>INCLINE Alarm</title>
+<style>
+	:root { color-scheme: dark; }
+	* { box-sizing: border-box; }
+	body { margin: 0; min-height: 100vh; min-height: 100dvh; background: #111; color: #eee; font: 16px/1.4 system-ui, sans-serif; display: flex; flex-direction: column; }
+	main { flex: 1; display: flex; flex-direction: column; gap: 16px; padding: 20px; max-width: 520px; width: 100%; margin: 0 auto; }
+	h1 { font-size: 20px; margin: 0; }
+	.card { background: #1c1c1e; border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+	label { display: grid; gap: 4px; font-size: 13px; opacity: .85; }
+	input { font: inherit; padding: 10px; border-radius: 8px; border: 1px solid #444; background: #2a2a2d; color: #fff; }
+	button { font: inherit; font-weight: 600; padding: 14px; border: 0; border-radius: 10px; background: #3b82f6; color: #fff; }
+	button.secondary { background: #3a3a3c; }
+	#status { font-size: 13px; opacity: .8; }
+	#alarm { position: fixed; inset: 0; z-index: 10; display: none; flex-direction: column; justify-content: center; gap: 18px; padding: 24px; text-align: center; background: #2b0b0b; animation: flash 1.6s ease-in-out infinite alternate; }
+	#alarm.on { display: flex; }
+	#alarm h2 { font-size: 30px; margin: 0; }
+	#alarm p { font-size: 18px; margin: 0; word-break: break-word; }
+	#alarm button { font-size: 22px; padding: 22px; }
+	#alarm .ack { background: #fff; color: #111; border: 3px solid #fff; }
+	#alarm .snooze { background: transparent; color: #fff; border: 3px solid #fff; }
+	#alarm img, h1 img { width: 64px; height: 64px; border-radius: 14px; margin: 0 auto; display: block; }
+	h1 { display: flex; align-items: center; gap: 12px; }
+	h1 img { margin: 0; width: 40px; height: 40px; border-radius: 9px; }
+	@keyframes flash { from { background: #2b0b0b; } to { background: #4a1212; } }
+</style>
+</head>
+<body>
+<main>
+	<h1><img src="icons/icon-192.png" alt="" />INCLINE Alarm</h1>
+	<div class="card">
+		<label>ntfy topic (the same one as in the INCLINE settings tab)
+			<input id="topic" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="your-long-secret-topic" />
+		</label>
+		<label>ntfy server
+			<input id="server" autocomplete="off" autocapitalize="off" spellcheck="false" value="https://ntfy.sh" />
+		</label>
+		<button id="connect">Start listening</button>
+		<button id="test" class="secondary">Test the alarm here</button>
+		<div id="status">Not connected.</div>
+	</div>
+	<div class="card" style="font-size:13px;opacity:.8"><p style="margin:0;display:block">Keep this page open (screen on, charging) so it can ring. Browsers cannot ring while the page is closed.
+		It checks the topic every 30 seconds (and listens live). A message containing <b>[FL-Alarm]</b> makes it ring loudly until you tap Acknowledge. Do-not-disturb / focus modes are not bypassed.</p>
+</div>
+</main>
+<div id="alarm" role="alertdialog" aria-live="assertive">
+	<img src="icons/icon-192.png" alt="" />
+	<h2>INCLINE needs you</h2>
+	<p id="alarm-text"></p>
+	<button class="ack" id="ack">Acknowledge</button>
+	<button class="snooze" id="snooze">Snooze 5 min</button>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
