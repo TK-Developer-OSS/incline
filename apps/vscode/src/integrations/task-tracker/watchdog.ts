@@ -7,6 +7,7 @@
 // vscode / SdkController 非依存 (WatchdogApi 経由なのでテスト可能)。
 
 import type { TurnPhase } from "@/shared/ExtensionMessage"
+import { logActivity } from "@/sdk/activity-log"
 import { Logger } from "@/shared/services/Logger"
 
 export const MAX_NUDGES = 6
@@ -29,11 +30,21 @@ export interface WatchdogApi {
 	now?(): number
 	/** 現在のセッションの最新メッセージの時刻 (ms)。サンプルの合間に短く動いただけでも「動いた」と分かるように使う。 */
 	lastActivityAt?(): number | undefined
+	/** レート制限のブレーカーが開いている間は催促しない (枠切れのキーを叩き続けないため)。 */
+	rateLimitHalted?(): boolean
 }
 
-export type WatchdogDecision = "busy" | "no-work" | "waiting-for-human" | "not-idle-long-enough" | "limit-reached" | "nudge"
+export type WatchdogDecision = "wrong-phase" | "busy" | "no-work" | "waiting-for-human" | "not-idle-long-enough" | "limit-reached" | "nudge"
+
+/**
+ * 催促してよい状態。意図は「Gemini が自問自答 / 質問 / 完了宣言なしの『終わりました』で止まったときに再開を促す」ことで、
+ * 見張り番ではない。API エラー (error)、ユーザーの中断 (resumable)、完了済み (completed) では送らない
+ * (エラー中の催促は新しいリクエストを起こして、枠切れのキーを叩き直すだけになる)。
+ */
+const NUDGE_PHASES: ReadonlySet<TurnPhase> = new Set<TurnPhase>(["awaiting_followup", "idle"])
 
 export function decideWatchdog(input: {
+	phase?: TurnPhase
 	busy: boolean
 	idleMs: number
 	intervalMs: number
@@ -42,6 +53,9 @@ export function decideWatchdog(input: {
 }): WatchdogDecision {
 	if (input.busy) {
 		return "busy"
+	}
+	if (input.phase !== undefined && !NUDGE_PHASES.has(input.phase)) {
+		return "wrong-phase"
 	}
 	if (input.work.aiInProgress === 0) {
 		return "no-work"
@@ -87,6 +101,9 @@ export function startWatchdog(api: WatchdogApi, intervalMinutes: number, sampleM
 		}
 		running = true
 		try {
+			if (api.rateLimitHalted?.()) {
+				return
+			}
 			const busy = isBusy(api.phase())
 			if (busy) {
 				lastBusyAt = now()
@@ -103,13 +120,14 @@ export function startWatchdog(api: WatchdogApi, intervalMinutes: number, sampleM
 			const t = now()
 			const idleMs = t - Math.max(lastBusyAt, lastNudgeAt) // 前回の通知からも数えて、間隔ごとに 1 回
 			const work = await api.pendingWork()
-			const decision = decideWatchdog({ busy, idleMs, intervalMs, work, nudgesSoFar: nudges })
+			const decision = decideWatchdog({ phase: api.phase(), busy, idleMs, intervalMs, work, nudgesSoFar: nudges })
 			if (decision !== "nudge") {
 				return
 			}
 			nudges++
 			lastNudgeAt = t
 			const minutes = Math.round((t - lastBusyAt) / 60_000)
+			logActivity("WATCHDOG", `nudge #${nudges}: idle ${minutes} min, ${work.aiInProgress} AI task(s) in progress`)
 			Logger.log(`[Watchdog] nudging (idle ${minutes} min, ${work.aiInProgress} AI task(s) in progress, nudge #${nudges})`)
 			await api.postMessage?.("manager", "Watchdog: the INCLINE agent has been idle", watchdogPrompt(minutes, work))
 			if (api.taskId() && !isBusy(api.phase())) {

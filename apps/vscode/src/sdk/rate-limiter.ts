@@ -7,6 +7,11 @@ import {
 	RATE_LIMIT_WINDOW_MS,
 } from "@/shared/rate-limits"
 import { Logger } from "@/shared/services/Logger"
+import { logActivity } from "./activity-log"
+
+function stamp1(ms: number): string {
+	return inclineTimestamp(new Date(ms))
+}
 
 function inclineTimestamp(date: Date = new Date()): string {
 	const p = (n: number, w = 2) => String(n).padStart(w, "0")
@@ -81,6 +86,7 @@ export class ApiRateLimiter {
 		const logMsg = `[INCLINE] [${this.getTimestamp()}] RateLimiter active [${callerName}]: FORCED WAIT ${delayRequired}ms`;
 		Logger.log(logMsg);
 		process.stderr.write(logMsg + "\n");
+		logActivity("WAIT", `fixed ${delayRequired}ms before ${callerName}`);
 
 		await new Promise((resolve) => setTimeout(resolve, delayRequired));
 
@@ -149,6 +155,8 @@ export class SlidingWindowModelRateLimiter {
 	private viewReqs: number[] = []
 	private viewTokens: TokenSample[] = []
 	private rpd: number | undefined
+	/** 429 を受けた後の冷却期限 (epoch ms)。この時刻まで次のモデルリクエストは送らない。 */
+	private cooldownUntil = 0
 
 	private rpm = RATE_LIMIT_RPM
 	private tpm = RATE_LIMIT_TPM
@@ -172,6 +180,10 @@ export class SlidingWindowModelRateLimiter {
 		if (typeof opts.minSpacingMs === "number" && opts.minSpacingMs >= 0) {
 			this.minSpacingMs = opts.minSpacingMs
 		}
+	}
+
+	public getMinSpacingMs(): number {
+		return this.minSpacingMs
 	}
 
 	/** 現在の RPM / TPM 上限 (ゲージ表示用)。 */
@@ -225,6 +237,7 @@ export class SlidingWindowModelRateLimiter {
 	/** モデルレスポンスの per-turn トークン使用量を記録する (TPM 計算用)。 */
 	public recordUsage(tokens: number, at: number = Date.now()): void {
 		if (Number.isFinite(tokens) && tokens > 0) {
+			recordRateLimitSuccess()
 			this.tokenSamples.push({ at, tokens })
 			this.viewTokens.push({ at, tokens })
 			// 実績が届いたので、それまでの見積もり (予約) は実績に置き換わった。直近のリクエストの大きさは、次の入力の目安になる。
@@ -247,6 +260,17 @@ export class SlidingWindowModelRateLimiter {
 	/** 次のモデルリクエストが TPM に足す量の予測: 直近のリクエストの大きさ (文脈はほぼ引き継がれる) + 予約したツール結果。 */
 	private predictNextRequestTokens(): number {
 		return Math.min(this.lastRequestTokens + this.pendingTokens, this.tpm)
+	}
+
+	public cooldownRemainingMs(now: number = Date.now()): number {
+		return Math.max(0, this.cooldownUntil - now)
+	}
+
+	/** プロバイダにレート制限された後、指定時間は次のモデルリクエストを止める。 */
+	public coolDown(ms: number, now: number = Date.now()): void {
+		if (Number.isFinite(ms) && ms > 0) {
+			this.cooldownUntil = Math.max(this.cooldownUntil, now + ms)
+		}
 	}
 
 	/** 手動でリクエスト時刻を記録 (テスト用)。 */
@@ -328,6 +352,12 @@ export class SlidingWindowModelRateLimiter {
 		}
 
 		waitMs = Math.min(Math.max(0, Math.ceil(waitMs)), this.maxWaitMs)
+
+		// 冷却中: 上限 (maxWaitMs) には縛られず、期限まで待つ。
+		if (this.cooldownUntil > now) {
+			waitMs = Math.max(waitMs, this.cooldownUntil - now)
+			reasons.push("cooldown after 429")
+		}
 		return { waitMs, reasons }
 	}
 
@@ -339,8 +369,10 @@ export class SlidingWindowModelRateLimiter {
 			const msg = `[INCLINE] [${inclineTimestamp()}] RateLimiter dynamic [${callerName}]: WAIT ${waitMs}ms (${reasons.join(", ") || "spacing"})`
 			Logger.log(msg)
 			process.stderr.write(`${msg}\n`)
+			logActivity("WAIT", `${waitMs}ms before ${callerName} (${reasons.join(", ") || "spacing"})`)
 			await new Promise((resolve) => setTimeout(resolve, waitMs))
 		}
+		logActivity("API", `model request start (${callerName}) rpm=${this.snapshot().rpmUsed + 1}/${this.rpm} tpm=${this.tokenSum()}/${this.tpm}`)
 		this.noteRequest()
 	}
 }
@@ -366,16 +398,18 @@ export const dynamicModelRateLimiter = new SlidingWindowModelRateLimiter()
 // プロバイダから 429 / RESOURCE_EXHAUSTED / "exceeded your current quota" や、
 // 一時的な高負荷 ("experiencing high demand" / "overloaded" / "try again later" /
 // 5xx) が返ってターンが失敗したとき、一定時間待ってから自動でターンを再開する。
-// 暫定は固定60秒・最大100回。最終的には AIモデル設定コンパネから制御する。
+// 暫定は固定60秒・最大10回。最終的には AIモデル設定コンパネから制御する。
 
 /** リトライまでの待機時間 (ms)。既定60秒。 */
 export const RATE_LIMIT_RETRY_DELAY_MS = 60_000
+/** 自動リトライの待機時間の上限 (ms)。倍々で伸ばしてここで頭打ち。 */
+export const RATE_LIMIT_RETRY_MAX_DELAY_MS = 20 * 60_000
 /**
  * 自動リトライの最大回数 (進捗なしの連続失敗)。超えたらエラーをそのまま UI に出す。
- * 無料枠が極端に絞られたモデル (gemini-3.7-flash 等: limit 20) でも粘れるよう多め。
- * 途中で1イテレーションでも前進すればカウントは 0 に戻るので実質もっと粘る。
+ * 10 回 (倍々バックオフで 60 秒から最大 20 分待つので、合計で数時間粘れる)。多すぎると、枠切れのキーを
+ * 叩き続けて長期ペナルティになる。途中で1イテレーションでも前進すればカウントは 0 に戻る。
  */
-export const RATE_LIMIT_MAX_RETRIES = 100
+export const RATE_LIMIT_MAX_RETRIES = 10
 // --- ユーザー設定 (incline.rateLimit.*) による上書き -----------------------
 // 既定値は上の定数。applyRateLimitSettings() で実行中に差し替えられる。
 let retryDelayMs = RATE_LIMIT_RETRY_DELAY_MS
@@ -489,14 +523,160 @@ export function parseRetryAfterMs(text: string | undefined | null): number | und
 }
 
 /**
- * 自動リトライ前の待機時間 (ms)。既定は固定120秒だが、サーバーの
- * "retry in Ns" ヒントの方が長ければそちらを尊重する。テスト環境では 0。
+ * 自動リトライ前の待機時間 (ms)。既定 60 秒から、連続失敗ごとに倍々 (上限 20 分)。
+ * サーバーの "retry in Ns" ヒントの方が長ければそちらを尊重する。テスト環境では 0。
  */
-export function rateLimitRetryDelayMs(text: string | undefined | null): number {
+export function rateLimitRetryDelayMs(text: string | undefined | null, attempt = 1): number {
 	if (IS_TEST_ENV) {
 		return 0
 	}
-	return Math.max(retryDelayMs, parseRetryAfterMs(text) ?? 0)
+	// 連続失敗するほど倍々で長く待つ (固定間隔で叩き続けると、プロバイダ側で長期ペナルティになる)。
+	const backoff = Math.min(retryDelayMs * 2 ** Math.max(0, attempt - 1), Math.max(retryDelayMs, RATE_LIMIT_RETRY_MAX_DELAY_MS))
+	const waitMs = Math.max(backoff, parseRetryAfterMs(text) ?? 0)
+	// 429 を受けたら、次のモデルリクエストも同じ時間は送らない (別経路の再試行が割り込んで叩き続けないように)。
+	dynamicModelRateLimiter.coolDown(waitMs)
+	return waitMs
+}
+
+// --- サーキットブレーカー (暴走止め) -------------------------------------
+// 成功が一度も無いまま連続でレート制限 / クォータ超過になったら、自動リトライとウォッチドッグを止めて人に知らせる。
+// 無限に叩き続けると、枠が戻らないどころかプロバイダ側で長期ペナルティになる (一晩で 1,000 件超の 429 を送った実績)。
+export const RATE_LIMIT_BREAKER_THRESHOLD = 5
+/** 止めている時間 (ms)。この間は自動リトライもウォッチドッグの催促も出さない。人が手動で送るのは妨げない。 */
+export const RATE_LIMIT_BREAKER_OPEN_MS = 60 * 60_000
+let consecutiveRateLimitFailures = 0
+let breakerOpenUntil = 0
+
+/** 連続失敗を 1 つ数える。しきい値に達してブレーカーが開いたら true (その瞬間だけ)。 */
+export function recordRateLimitFailure(now: number = Date.now()): boolean {
+	consecutiveRateLimitFailures++
+	if (consecutiveRateLimitFailures >= RATE_LIMIT_BREAKER_THRESHOLD && breakerOpenUntil <= now) {
+		breakerOpenUntil = now + RATE_LIMIT_BREAKER_OPEN_MS
+		logActivity("BREAKER", `OPEN after ${consecutiveRateLimitFailures} consecutive rate-limit failures; auto-retry/watchdog/HTTP stopped until ${stamp1(breakerOpenUntil)}`)
+		return true
+	}
+	return false
+}
+
+/** リクエストが通った (トークン実績が届いた)。連続失敗を 0 に戻し、ブレーカーを閉じる。 */
+export function recordRateLimitSuccess(): void {
+	rateLimitGaveUp = false
+	if (breakerOpenUntil > 0 || consecutiveRateLimitFailures > 0) {
+		logActivity("BREAKER", `reset (success after ${consecutiveRateLimitFailures} failure(s))`)
+	}
+	consecutiveRateLimitFailures = 0
+	breakerOpenUntil = 0
+}
+
+// 自動リトライを諦めた (最大回数に達した / 日次の枠切れ / ブレーカー) 状態。成功実績が届くまで続き、その間ウォッチドッグは
+// 催促しない (催促は新しいターン = 新しいリクエストなので、枠切れのキーを叩き直すことになる)。
+let rateLimitGaveUp = false
+
+export function markRateLimitGaveUp(reason: string): void {
+	if (!rateLimitGaveUp) {
+		logActivity("RETRY", `GAVE UP: ${reason}; watchdog nudges suspended until a request succeeds`)
+	}
+	rateLimitGaveUp = true
+}
+
+/** ウォッチドッグが催促してはいけない状態か (リトライを諦めた、またはブレーカーが開いている)。 */
+export function isRateLimitHalted(now: number = Date.now()): boolean {
+	return rateLimitGaveUp || breakerOpenUntil > now
+}
+
+export function isRateLimitBreakerOpen(now: number = Date.now()): boolean {
+	return breakerOpenUntil > now
+}
+
+// --- HTTP 単位のゲート (最も細かい粒度) -----------------------------------
+// beforeModel / beforeTool のフックは『モデルリクエスト 1 回』『ツール 1 回』の粒度で、その下の再試行
+// (SDK 内部のリトライ最大 6 回、エージェントのプロバイダエラー再試行) は素通しだった。実際の HTTP 発行地点
+// (fetch) にウェイトを入れ、再試行も含めた全リクエストに (a) 最低間隔 (b) 429 後の倍々の冷却
+// (c) ブレーカーが開いている間の即時拒否 を効かせる。対象は枠の厳しい Gemini (generativelanguage) のみ。
+const GATED_HOST_PATTERN = /(^|\.)generativelanguage\.googleapis\.com$/i
+const HTTP_COOLDOWN_BASE_MS = 30_000
+let lastHttpAt = 0
+let httpChain: Promise<void> = Promise.resolve()
+let httpConsecutive429 = 0
+
+function urlLabel(input: unknown): string {
+	try {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as { url?: string })?.url
+		const u = new URL(String(url))
+		return `${u.hostname}${u.pathname}`
+	} catch {
+		return "?"
+	}
+}
+
+function gatedHost(input: unknown): boolean {
+	try {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as { url?: string })?.url
+		return typeof url === "string" && GATED_HOST_PATTERN.test(new URL(url).hostname)
+	} catch {
+		return false
+	}
+}
+
+/** Gemini への HTTP リクエストを 1 件ずつ、最低間隔を空けて通す。順番待ちは直列。 */
+async function waitHttpTurn(signal: AbortSignal | null | undefined): Promise<void> {
+	const turn = httpChain.then(async () => {
+		const spacing = dynamicModelRateLimiter.getMinSpacingMs()
+		const wait = Math.max(0, lastHttpAt + spacing - Date.now())
+		if (wait > 0 && !IS_TEST_ENV) {
+			Logger.log(`[INCLINE] [${inclineTimestamp()}] RateLimiter http [gemini]: WAIT ${wait}ms (spacing)`)
+			logActivity("WAIT", `${wait}ms before HTTP request (min-spacing ${spacing}ms)`)
+			await new Promise<void>((resolve) => {
+				const timer = setTimeout(resolve, wait)
+				signal?.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true })
+			})
+		}
+		lastHttpAt = Date.now()
+	})
+	httpChain = turn.catch(() => undefined)
+	await turn
+}
+
+export function installRateLimitedFetch(): void {
+	const original = globalThis.fetch
+	if (!original || (original as { __inclineGated?: boolean }).__inclineGated) {
+		return
+	}
+	const gated = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+		if (!gatedHost(input)) {
+			return original(input, init)
+		}
+		if (isRateLimitBreakerOpen()) {
+			// 開いている間は送らない。SDK の再試行も、ここで即座に失敗して終わる。
+			logActivity("API", `HTTP BLOCKED locally (breaker open): ${urlLabel(input)}`)
+			throw new Error("429 exceeded your current quota (suppressed locally: rate-limit circuit breaker is open)")
+		}
+		const cooldown = dynamicModelRateLimiter.cooldownRemainingMs()
+		if (cooldown > 0 && !IS_TEST_ENV) {
+			logActivity("WAIT", `${cooldown}ms cooldown after 429 before HTTP request`)
+			await sleep(cooldown)
+		}
+		await waitHttpTurn(init?.signal)
+		const startedAt = Date.now()
+		const response = await original(input, init)
+		logActivity("API", `HTTP ${response.status} ${urlLabel(input)} (${Date.now() - startedAt}ms to response)`)
+		if (response.status === 429) {
+			httpConsecutive429++
+			const headerMs = Number.parseFloat(response.headers.get("retry-after") ?? "") * 1000
+			const backoff = Math.min(HTTP_COOLDOWN_BASE_MS * 2 ** (httpConsecutive429 - 1), RATE_LIMIT_RETRY_MAX_DELAY_MS)
+			dynamicModelRateLimiter.coolDown(Math.max(backoff, Number.isFinite(headerMs) ? headerMs : 0))
+			if (recordRateLimitFailure()) {
+				Logger.error("[INCLINE] Rate-limit circuit breaker opened at the HTTP gate (consecutive 429s)")
+			}
+		} else if (response.ok) {
+			httpConsecutive429 = 0
+			recordRateLimitSuccess()
+		}
+		return response
+	}) as typeof fetch & { __inclineGated?: boolean }
+	gated.__inclineGated = true
+	;(gated as unknown as { preconnect?: unknown }).preconnect = (original as unknown as { preconnect?: unknown }).preconnect
+	globalThis.fetch = gated
 }
 
 export function sleep(ms: number): Promise<void> {

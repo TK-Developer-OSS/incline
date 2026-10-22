@@ -292,7 +292,7 @@ export class SdkSessionEventCoordinator {
 	}
 
 	private beginRetryCountdown(errorText: string, sessionId: string): void {
-		this.retryDeadlineMs = Date.now() + rateLimitRetryDelayMs(errorText)
+		this.retryDeadlineMs = Date.now() + rateLimitRetryDelayMs(errorText, this.rlRetryCount)
 		this.retrySessionId = sessionId
 		if (this.retryStatusTs === undefined) {
 			this.retryStatusTs = Date.now()

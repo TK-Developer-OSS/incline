@@ -157,7 +157,7 @@ describe("applyRateLimitSettings", () => {
 		applyRateLimitSettings({ rpm: -1, tpm: Number.NaN, retryDelaySec: -5, maxRetries: undefined })
 		expect(dynamicModelRateLimiter.getLimits()).toEqual({ rpm: RATE_LIMIT_RPM, tpm: RATE_LIMIT_TPM })
 		expect(getRateLimitRetryDelayMs()).toBe(60_000)
-		expect(getRateLimitMaxRetries()).toBe(100)
+		expect(getRateLimitMaxRetries()).toBe(10)
 		expect(toolExecutionRateLimiter.getMinDelay()).toBe(10_000)
 	})
 })
@@ -166,7 +166,7 @@ describe("provider default limits", () => {
 	it("uses provider defaults unless the user set them explicitly", () => {
 		applyRateLimitSettings({})
 		setActiveRateLimitProvider("gemini")
-		expect(dynamicModelRateLimiter.getLimits()).toEqual({ rpm: 10, tpm: 250_000 })
+		expect(dynamicModelRateLimiter.getLimits()).toEqual({ rpm: 5, tpm: 150_000 })
 
 		setActiveRateLimitProvider("ollama")
 		expect(dynamicModelRateLimiter.getLimits().rpm).toBeGreaterThanOrEqual(1000)
@@ -268,5 +268,44 @@ describe("predictive TPM and pending tool-result reservation (#121)", () => {
 	it("estimates tokens: ASCII about 4 chars per token, other characters 1 each", () => {
 		expect(estimateTokensFromText("abcd".repeat(100))).toBe(100)
 		expect(estimateTokensFromText("あ".repeat(50))).toBe(50)
+	})
+})
+
+describe("429 後の冷却と倍々バックオフ (長期ペナルティ対策)", () => {
+	it("冷却中は maxWait を超えても期限まで待つ", () => {
+		const rl = new SlidingWindowModelRateLimiter()
+		rl.updateLimits({ rpm: 1000, tpm: 1_000_000, minSpacingMs: 0 })
+		rl.coolDown(300_000, 1000)
+		const { waitMs, reasons } = rl.computeWaitMs(1000)
+		expect(waitMs).toBe(300_000)
+		expect(reasons).toContain("cooldown after 429")
+		expect(rl.computeWaitMs(301_000).waitMs).toBe(0)
+	})
+})
+
+describe("サーキットブレーカー", () => {
+	it("連続失敗でしきい値に達したら開き、成功実績で閉じる", async () => {
+		const m = await import("./rate-limiter")
+		m.recordRateLimitSuccess()
+		let opened = false
+		for (let i = 0; i < m.RATE_LIMIT_BREAKER_THRESHOLD; i++) {
+			opened = m.recordRateLimitFailure()
+		}
+		expect(opened).toBe(true)
+		expect(m.isRateLimitBreakerOpen()).toBe(true)
+		m.dynamicModelRateLimiter.recordUsage(100)
+		expect(m.isRateLimitBreakerOpen()).toBe(false)
+	})
+})
+
+describe("リトライを諦めたらウォッチドッグを止める", () => {
+	it("諦めた状態は成功実績が届くまで続く", async () => {
+		const m = await import("./rate-limiter")
+		m.recordRateLimitSuccess()
+		expect(m.isRateLimitHalted()).toBe(false)
+		m.markRateLimitGaveUp("test")
+		expect(m.isRateLimitHalted()).toBe(true)
+		m.dynamicModelRateLimiter.recordUsage(10)
+		expect(m.isRateLimitHalted()).toBe(false)
 	})
 })

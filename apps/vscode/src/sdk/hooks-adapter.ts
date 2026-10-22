@@ -24,6 +24,7 @@ import { Logger } from "@shared/services/Logger"
 import { HookFactory } from "@/core/hooks/hook-factory"
 import { getHooksEnabledSafe } from "@/core/hooks/hooks-utils"
 import type { StateManager } from "@/core/storage/StateManager"
+import { logActivity } from "./activity-log"
 import { dynamicModelRateLimiter, estimateTokensFromText, setActiveRateLimitProvider, toolExecutionRateLimiter } from "./rate-limiter"
 
 export type HookMessageEmitter = (message: ClineMessage) => void
@@ -167,6 +168,7 @@ export function buildAgentHooks(
 			// ファイルフックの有効/無効 (hooksEnabled) とは無関係に常に効かせる。
 			// beforeModel の待機とは独立したパラメータ (toolExecutionRateLimiter)。
 			await toolExecutionRateLimiter.wait("AgentRuntime.beforeTool")
+			logActivity("TOOL", `start ${ctx.toolCall.toolName} ${JSON.stringify(ctx.input ?? {}).slice(0, 150)}`)
 
 			let runningTs: number | undefined
 			try {
@@ -224,7 +226,9 @@ export function buildAgentHooks(
 			// usage に載るので、ここで先に積んでおかないと、大きな結果を送った直後のリクエストが枠を超える。フック (hooksEnabled) とは無関係。
 			try {
 				const resultText = typeof ctx.result === "string" ? ctx.result : JSON.stringify(ctx.result ?? "")
-				dynamicModelRateLimiter.reservePending(estimateTokensFromText(resultText))
+				const reserved = estimateTokensFromText(resultText)
+				dynamicModelRateLimiter.reservePending(reserved)
+				logActivity("TOOL", `end ${ctx.toolCall.toolName} ${ctx.result.isError ? "ERROR" : "ok"} ${ctx.durationMs}ms result≈${reserved}tok`)
 			} catch {
 				// 見積もれなくても動作に影響しない
 			}

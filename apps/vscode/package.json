@@ -2,7 +2,7 @@
 	"name": "incline",
 	"displayName": "INCLINE",
 	"description": "INCLINE — an unofficial fork of Cline (Apache-2.0) with request throttling, RPM/TPM display and a task tracker. Autonomous coding agent right in your IDE, capable of creating/editing files, running commands, using the browser, and more with your permission every step of the way.",
-	"version": "4.1.25",
+	"version": "4.1.26",
 	"icon": "assets/icons/icon.png",
 	"engines": {
 		"vscode": "^1.101.0"
@@ -401,7 +401,7 @@
 				},
 				"incline.rateLimit.maxRetries": {
 					"type": "number",
-					"default": 100,
+					"default": 10,
 					"minimum": 0,
 					"description": "Maximum number of automatic retries (consecutive failures without progress). The count resets as soon as the run makes progress. 0 disables automatic retry."
 				},

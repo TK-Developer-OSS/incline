@@ -33,7 +33,8 @@ export const PROVIDER_RATE_LIMIT_DEFAULTS: Readonly<
 	Record<string, { rpm?: number; tpm?: number; minSpacingSec?: number }>
 > = {
 	// Google AI Studio 無料枠 (flash 系で概ね 10 RPM / 250k TPM、Pro 系はさらに低い)
-	gemini: { rpm: 10, tpm: 250_000 },
+	// 429 の再試行が積み重なると長期ペナルティを受けるので、公開値よりかなり低く、間隔も長めに置く。
+	gemini: { rpm: 5, tpm: 150_000, minSpacingSec: 15 },
 	// ローカル実行: 外部の上限は無いので実質無制限・間隔待ちなし (GPU 負荷は別問題)
 	ollama: { rpm: 1000, tpm: 100_000_000, minSpacingSec: 0 },
 	lmstudio: { rpm: 1000, tpm: 100_000_000, minSpacingSec: 0 },

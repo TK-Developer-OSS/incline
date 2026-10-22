@@ -9,6 +9,11 @@ describe("decideWatchdog", () => {
 	it("nudges only when idle long enough with AI work left, and not while busy / waiting for a human / over the limit", () => {
 		expect(decideWatchdog(base)).toBe("nudge")
 		expect(decideWatchdog({ ...base, busy: true })).toBe("busy")
+		for (const phase of ["error", "resumable", "completed"] as const) {
+			expect(decideWatchdog({ ...base, phase })).toBe("wrong-phase") // エラー / 中断 / 完了済みでは催促しない
+		}
+		expect(decideWatchdog({ ...base, phase: "awaiting_followup" })).toBe("nudge") // 自問自答で止まった
+		expect(decideWatchdog({ ...base, phase: "idle" })).toBe("nudge")
 		expect(decideWatchdog({ ...base, work: work(0) })).toBe("no-work")
 		expect(decideWatchdog({ ...base, work: work(2, 2) })).toBe("waiting-for-human") // 全部が人間の判断待ち = 正当な待機
 		expect(decideWatchdog({ ...base, work: work(2, 1) })).toBe("nudge") // 1 つでも動けるものが残っていれば通知
@@ -83,7 +88,7 @@ describe("startWatchdog", () => {
 
 		phase = "streaming" // 動き出したら、次の停止でまた通知できる
 		await advance(60_000)
-		phase = "completed"
+		phase = "awaiting_followup"
 		await advance(6 * 60_000)
 		expect(calls.followups.length).toBeGreaterThan(MAX_NUDGES)
 	})
@@ -114,7 +119,7 @@ describe("startWatchdog: activity between samples", () => {
 		let activity: number | undefined
 		const postMessage = vi.fn(async () => {})
 		const api = {
-			phase: () => "completed" as const,
+			phase: () => "awaiting_followup" as const,
 			taskId: () => undefined,
 			pendingWork: async () => ({ aiInProgress: 1, waitingForHuman: 0 }),
 			followup: async () => {},
