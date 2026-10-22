@@ -291,6 +291,13 @@ describe("normalizeSdkBaseUrl", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveProviderFetch", () => {
+	it("wraps Gemini's fetch in the rate-limit gate (SDK internal retries pass through it) and leaves others untouched", () => {
+		const gemini = resolveProviderFetch("gemini", undefined)
+		expect(gemini).not.toBe(netModule.fetch)
+		expect((gemini as unknown as { __inclineGated?: boolean }).__inclineGated).toBe(true)
+		expect(resolveProviderFetch("anthropic", undefined)).toBe(netModule.fetch)
+	})
+
 	it("gives local model servers the idle-timeout-free fetch", () => {
 		for (const providerId of ["lmstudio", "ollama", "openai-compatible", "litellm"]) {
 			expect(resolveProviderFetch(providerId, undefined)).toBe(netModule.fetchWithoutIdleTimeouts)

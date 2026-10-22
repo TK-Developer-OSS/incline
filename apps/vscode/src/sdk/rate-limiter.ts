@@ -637,10 +637,13 @@ async function waitHttpTurn(signal: AbortSignal | null | undefined): Promise<voi
 	await turn
 }
 
-export function installRateLimitedFetch(): void {
-	const original = globalThis.fetch
+/**
+ * fetch にゲートを被せて返す。拡張は SDK に独自の fetch (プロキシ / CA 対応、providerConfig.fetch) を渡しており
+ * globalThis.fetch を差し替えても素通りになるので、その fetch (resolveProviderFetch) をここで包む。
+ */
+export function createRateLimitedFetch(original: typeof fetch): typeof fetch {
 	if (!original || (original as { __inclineGated?: boolean }).__inclineGated) {
-		return
+		return original
 	}
 	const gated = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
 		if (!gatedHost(input)) {
@@ -676,7 +679,7 @@ export function installRateLimitedFetch(): void {
 	}) as typeof fetch & { __inclineGated?: boolean }
 	gated.__inclineGated = true
 	;(gated as unknown as { preconnect?: unknown }).preconnect = (original as unknown as { preconnect?: unknown }).preconnect
-	globalThis.fetch = gated
+	return gated
 }
 
 export function sleep(ms: number): Promise<void> {

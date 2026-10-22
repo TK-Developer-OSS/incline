@@ -18,7 +18,6 @@ import {
 	recordRateLimitFailure,
 	RATE_LIMIT_BREAKER_THRESHOLD,
 	retryRunMadeProgress,
-	sleep,
 } from "./rate-limiter"
 import { sendNtfyNotification } from "@/services/ntfy"
 import { formatOutgoing } from "@/services/ntfy/protocol"
@@ -118,6 +117,9 @@ export class VscodeSessionHost implements SdkSessionHost {
 	private readonly gitTelemetry: VscodeGitTelemetryManager
 
 	private readonly rateLimiter: ApiRateLimiter
+	/** 閉じた / 切り替えた / 中断したセッション。自動リトライのループはこれを見て止まる (裏で走り続けないように)。 */
+	private readonly retryCancelled = new Set<string>()
+	private readonly retryWakers = new Map<string, () => void>()
 
 	private constructor(
 		inner: ClineCore,
@@ -236,11 +238,36 @@ export class VscodeSessionHost implements SdkSessionHost {
 		}
 	}
 
+	/** このセッションの自動リトライを止める。待機中のものは即座に起こして終わらせる。 */
+	private cancelRetries(sessionId: string, why: string): void {
+		this.retryCancelled.add(sessionId)
+		const wake = this.retryWakers.get(sessionId)
+		if (wake) {
+			logActivity("RETRY", `session ${sessionId} auto-retry cancelled (${why})`)
+			wake()
+		}
+	}
+
+	/** 中止されたら早く戻る sleep。 */
+	private sleepUnlessCancelled(sessionId: string, ms: number): Promise<void> {
+		return new Promise((resolve) => {
+			const done = () => {
+				clearTimeout(timer)
+				this.retryWakers.delete(sessionId)
+				resolve()
+			}
+			const timer = setTimeout(done, ms)
+			this.retryWakers.set(sessionId, done)
+		})
+	}
+
 	async send(input: SendSessionInput) {
 		// レート制限の強制ウェイトはここ (ユーザーメッセージ送信時=1ターン1回) ではなく、
 		// エージェントループの各モデルリクエスト前に効かせる。hooks-adapter.ts の
 		// beforeModel フックが sharedApiRateLimiter.wait() を呼ぶ。
 		Logger.log(`[VscodeSessionHost] send() called: sessionId=${input.sessionId}, prompt=${input.prompt?.substring(0, 50)}`)
+		// ユーザーが新しく送ったら、以前の中止は解除する (自動リトライの再開プロンプトはこの経路を通らない)。
+		this.retryCancelled.delete(input.sessionId)
 		try {
 			let result = await this.inner.send(input)
 
@@ -260,7 +287,8 @@ export class VscodeSessionHost implements SdkSessionHost {
 				result?.finishReason !== "completed" &&
 				isRateLimitErrorText(result?.text) &&
 				attempt < getRateLimitMaxRetries() &&
-				!isRateLimitBreakerOpen()
+				!isRateLimitBreakerOpen() &&
+				!this.retryCancelled.has(input.sessionId)
 			) {
 				if (recordRateLimitFailure()) {
 					Logger.error(`[VscodeSessionHost] Rate-limit circuit breaker opened; stopping auto-retry (session ${input.sessionId})`)
@@ -286,7 +314,11 @@ export class VscodeSessionHost implements SdkSessionHost {
 				process.stderr.write(logMsg + "\n")
 				logActivity("RETRY", `session ${input.sessionId} attempt ${attempt}/${getRateLimitMaxRetries()} in ${Math.round(waitMs / 1000)}s: ${String(result?.text).slice(0, 120)}`)
 
-				await sleep(waitMs)
+				await this.sleepUnlessCancelled(input.sessionId, waitMs)
+				if (this.retryCancelled.has(input.sessionId)) {
+					Logger.log(`[VscodeSessionHost] Auto-retry cancelled while waiting (session closed / stopped): ${input.sessionId}`)
+					break
+				}
 
 				Logger.log(
 					`[VscodeSessionHost] Auto-retrying turn after rate limit (attempt ${attempt}/${getRateLimitMaxRetries()}, total ${totalRetries}) for session ${input.sessionId}`,
@@ -341,6 +373,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 	}
 
 	async abort(sessionId: string, reason?: unknown): Promise<void> {
+		this.cancelRetries(sessionId, "abort")
 		try {
 			return await this.inner.abort(sessionId, reason)
 		} catch (error) {
@@ -357,11 +390,15 @@ export class VscodeSessionHost implements SdkSessionHost {
 	}
 
 	async stop(sessionId: string): Promise<void> {
+		this.cancelRetries(sessionId, "stop")
 		this.gitTelemetry.stop(sessionId)
 		return this.inner.stop(sessionId)
 	}
 
 	async dispose(reason?: string): Promise<void> {
+		for (const id of [...this.retryWakers.keys()]) {
+			this.cancelRetries(id, "dispose")
+		}
 		this.gitTelemetry.dispose()
 		return this.inner.dispose(reason)
 	}
@@ -379,6 +416,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 	}
 
 	async delete(sessionId: string): Promise<boolean> {
+		this.cancelRetries(sessionId, "delete")
 		return this.inner.delete(sessionId)
 	}
 

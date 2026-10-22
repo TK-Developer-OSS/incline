@@ -11,7 +11,7 @@ vi.mock("@cline/core", async () => {
 })
 vi.mock("@/services/logging/distinctId", () => ({ getDistinctId: () => "distinct-id" }))
 vi.mock("@/core/storage/StateManager", () => ({
-	StateManager: { get: () => ({ getGlobalStateKey: () => undefined }) },
+	StateManager: { get: () => ({ getGlobalStateKey: () => undefined, getGlobalSettingsKey: () => undefined }) },
 }))
 vi.mock("./vscode-runtime-builder", () => ({ createVscodeExtraTools: mockCreateVscodeExtraTools }))
 
@@ -317,5 +317,34 @@ describe("VscodeSessionHost telemetry wiring", () => {
 		await host.restore({ sessionId: "session-1", checkpointRunCount: 1 })
 		expect(beforeStartSession).not.toHaveBeenCalled()
 		expect(restore).toHaveBeenCalledWith({ sessionId: "session-1", checkpointRunCount: 1 })
+	})
+})
+
+describe("VscodeSessionHost auto-retry cancellation", () => {
+	const quotaFailure = { finishReason: "error", text: "429 RESOURCE_EXHAUSTED: You exceeded your current quota", usage: {}, toolCalls: [] }
+
+	async function hostWithSend(send: ReturnType<typeof vi.fn>) {
+		mockClineCoreCreate.mockReset().mockResolvedValue({ start: mockInnerStart, send, stop: async () => {}, abort: async () => {}, dispose: async () => {} })
+		return VscodeSessionHost.create({ mcpHub: {} as never, telemetry: makeTelemetry() })
+	}
+
+	it("keeps retrying a rate-limited turn while the session is open", async () => {
+		const send = vi.fn().mockResolvedValueOnce(quotaFailure).mockResolvedValueOnce({ finishReason: "completed", text: "ok", usage: {}, toolCalls: [] })
+		const host = await hostWithSend(send)
+		await host.send({ sessionId: "s1", prompt: "hi" } as never)
+		expect(send).toHaveBeenCalledTimes(2)
+		await host.dispose()
+	})
+
+	it("stops retrying once the session is stopped (closed / switched away)", async () => {
+		let host!: VscodeSessionHost
+		const send = vi.fn().mockImplementation(async () => {
+			await host.stop("s2") // ユーザーが表示から閉じた
+			return quotaFailure
+		})
+		host = await hostWithSend(send)
+		await host.send({ sessionId: "s2", prompt: "hi" } as never)
+		expect(send).toHaveBeenCalledTimes(1) // 再開プロンプトを送り直さない
+		await host.dispose()
 	})
 })

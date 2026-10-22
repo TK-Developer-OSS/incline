@@ -35,7 +35,7 @@ import { registerConfirmReplyNotifier } from "./integrations/task-tracker/confir
 import { needsConfirmation } from "./integrations/task-tracker/task-md"
 import { createConfirmAlarm } from "./integrations/task-tracker/confirm-alarm"
 import { onAlarmAck, onTasksChangedExternally } from "./integrations/task-tracker/task-events"
-import { installRateLimitedFetch, isRateLimitHalted } from "./sdk/rate-limiter"
+import { isRateLimitHalted } from "./sdk/rate-limiter"
 import { startWatchdog } from "./integrations/task-tracker/watchdog"
 import { emitTasksChangedExternally } from "./integrations/task-tracker/task-events"
 import { sendNtfyNotification, sendNtfyTestAlarm } from "./services/ntfy"
@@ -655,9 +655,6 @@ ${ctx.cellJson || "{}"}
 	} catch (error) {
 		Logger.error("[Cline] Failed to start Incline MCP server:", error)
 	}
-
-	// Incline: Gemini への HTTP 発行地点 (fetch) にも間隔 / 冷却 / ブレーカーを効かせる (SDK 内部の再試行も対象)。
-	installRateLimitedFetch()
 
 	// Incline: レートリミッター / 自動リトライの設定 (incline.rateLimit.*) を反映する。
 	try {

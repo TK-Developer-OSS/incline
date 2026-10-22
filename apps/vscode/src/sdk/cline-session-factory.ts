@@ -49,6 +49,7 @@ import { getDistinctId } from "@/services/logging/distinctId"
 import { fetch, fetchWithoutIdleTimeouts } from "@/shared/net"
 import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedrock-config"
 import { buildAgentHooks } from "./hooks-adapter"
+import { createRateLimitedFetch } from "./rate-limiter"
 import * as nodeFs from "node:fs"
 import { pickNewerApiKey } from "./api-key-choice"
 import * as nodePath from "node:path"
@@ -820,7 +821,9 @@ function isLocalNetworkUrl(baseUrl: string | undefined): boolean {
 }
 
 export function resolveProviderFetch(sdkProviderId: string, baseUrl: string | undefined): typeof globalThis.fetch {
-	return LOCAL_SERVER_PROVIDERS.has(sdkProviderId) && isLocalNetworkUrl(baseUrl) ? fetchWithoutIdleTimeouts : fetch
+	const base = LOCAL_SERVER_PROVIDERS.has(sdkProviderId) && isLocalNetworkUrl(baseUrl) ? fetchWithoutIdleTimeouts : fetch
+	// Incline: HTTP 単位のゲート (最低間隔 / 429 後の冷却 / ブレーカー)。SDK 内部の再試行もここを通る。枠の厳しい Gemini だけに被せる。
+	return sdkProviderId === "gemini" ? createRateLimitedFetch(base) : base
 }
 
 export function resolveBaseUrl(providerId: string, config: ApiConfiguration): string | undefined {
