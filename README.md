@@ -12,10 +12,13 @@ An unofficial fork of [Cline](https://github.com/cline/cline) for VS Code, with 
 
 ### Keeps running without you
 
-- **Request throttling.** Sliding-window RPM/TPM limiting before each model request and tool call. The next request's token use is predicted from the last request plus the estimated size of tool results, and waits are scheduled so you stay under the provider's limit. Settings: `incline.rateLimit.*` (RPM, TPM, RPD, minimum spacing, tool delay).
-- **Waits out rate limits.** On a 429 or a quota error the agent shows a countdown, retries with backoff (`incline.rateLimit.maxRetries`, `retryDelaySec`) and resumes by itself. Errors are classified (rate limit, quota, auth, ...) so a status check tells you why it stopped.
+- **Request throttling.** Sliding-window RPM/TPM limiting before each model request, and before each tool call once usage reaches 60% of the limit. The next request's token use is predicted from the last request plus the estimated size of tool results, and waits are scheduled so you stay under the provider's limit. Optional fixed waits per request, before each tool and after each tool.
+- **Rate limit / auto-retry settings panel.** Max retries, retry wait, minimum spacing, RPM, TPM and the fixed waits are set in the INCLINE settings tab (or `incline.rateLimit.*`). Provider-specific defaults apply until you change them; Gemini's are deliberately conservative, so raise RPM/TPM on a paid key.
+- **Waits out rate limits and outages.** A 429 / quota error is retried a limited number of times with a doubling wait, honoring the server's "retry in Ns" hint. 502 / 503 / 504 (overloaded, unavailable, timeout) are retried without a limit. Every attempt is appended to the chat with its HTTP status and the wait, and the provider's original response stays one click away under "Original error".
+- **Circuit breaker.** After repeated 429s with no success, requests to that API key pause for an hour instead of piling up penalties; changing the key lifts the pause. Closing the session or pressing Cancel stops any retry running in the background.
 - **Usage gauges.** Live RPM, TPM and RPD meters in the task header and chat UI.
-- **Watchdog.** If the agent goes idle while tasks assigned to it are still in progress, it is nudged to continue or to write down what it is waiting for (`incline.watchdog.*`). It stays quiet while the only open item is waiting for you.
+- **Operation log.** `~/.incline/data/logs/activity.log` records each request, wait, tool call, retry, breaker event and watchdog nudge on one line, so you can see afterwards exactly what was sent and when.
+- **Watchdog.** If the agent stops after asking itself a question, or without finishing, while tasks assigned to it are still in progress, it is nudged to continue or to write down what it is waiting for (`incline.watchdog.*`). It stays quiet while the only open item is waiting for you, while there is no session, and after retries have been given up.
 
 ### Incline Tasks: a backlog you and the AI share
 
@@ -37,7 +40,7 @@ An unofficial fork of [Cline](https://github.com/cline/cline) for VS Code, with 
 ### Other changes
 
 - **Text tool calls.** Middleware that recovers tool calls from models that emit them as plain text (useful with small local models).
-- **Settings survive reinstalls.** State writes are locked, verified and audited (`~/.incline/data/logs/state-writes.jsonl`), so an old window cannot overwrite newer settings. Reload all windows after reinstalling.
+- **Settings survive reinstalls.** State writes are locked, verified and audited (`~/.incline/data/logs/state-writes.jsonl`), and a window running an older build will not overwrite settings saved by a newer one. Reload all windows after reinstalling.
 - **Separate data directory.** Sessions, history and settings live in `~/.incline`, never mixed with an upstream Cline install in `~/.cline`.
 - **No Cline cloud.** Sign-up, login, ClinePass, telemetry and cloud sessions are disabled; requests identify themselves as Incline.
 - **Terms of use on first run.** You must accept them once before the extension can be used.
