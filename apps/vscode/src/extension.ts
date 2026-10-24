@@ -40,6 +40,7 @@ import { startWatchdog } from "./integrations/task-tracker/watchdog"
 import { emitTasksChangedExternally } from "./integrations/task-tracker/task-events"
 import { sendNtfyNotification, sendNtfyTestAlarm } from "./services/ntfy"
 import { TaskMdStore } from "./integrations/task-tracker/task-md-store"
+import { staleWriterHooks } from "./shared/storage/ClineFileStorage"
 import { registerRateLimitConfig } from "./sdk/rate-limit-config"
 import { defaultMessageFile, MessageStore } from "./services/incline-mcp/message-store"
 import { registerInclineMcp } from "./services/incline-mcp/register"
@@ -654,6 +655,20 @@ ${ctx.cellJson || "{}"}
 		await registerInclineMcp(context, webview.controller)
 	} catch (error) {
 		Logger.error("[Cline] Failed to start Incline MCP server:", error)
+	}
+
+	// Incline (#127): このウィンドウが、新しいビルドの設定を古いメモリで書き戻しそうになったら、書かずに知らせる。
+	staleWriterHooks.onStale = () => {
+		void vscode.window
+			.showWarningMessage(
+				"INCLINE: this window runs an older build than the one that last saved the settings. Saving was paused to avoid overwriting them. Reload the window.",
+				"Reload Window",
+			)
+			.then((choice) => {
+				if (choice === "Reload Window") {
+					void vscode.commands.executeCommand("workbench.action.reloadWindow")
+				}
+			})
 	}
 
 	// Incline: レートリミッター / 自動リトライの設定 (incline.rateLimit.*) を反映する。

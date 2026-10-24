@@ -86,7 +86,7 @@ e2e.describe("Checkpoint settings", () => {
 		await expect(checkpoints).toBeChecked()
 		await checkpoints.click()
 		await expect(checkpoints).not.toBeChecked()
-		await sidebar.getByRole("button", { name: "Done" }).click()
+		await sidebar.getByRole("button", { name: "Save", exact: true }).click()
 
 		await inputbox.fill("message without checkpoints")
 		await sidebar.getByTestId("send-button").click()
@@ -128,7 +128,7 @@ e2e.describe("Checkpoint settings", () => {
 		await expect(checkpoints).not.toBeChecked()
 		await expect(checkpoints).toBeFocused()
 		await expect(checkpointSetting).toHaveClass(/settings-target-highlight/)
-		await sidebar.getByRole("button", { name: "Done" }).click()
+		await sidebar.getByRole("button", { name: "Save", exact: true }).click()
 		await sidebar.getByTestId("virtuoso-item-list").getByRole("button", { name: "Cancel" }).click()
 
 		if (!server) {
@@ -143,7 +143,7 @@ e2e.describe("Checkpoint settings", () => {
 			await openSettings()
 			await checkpoints.click()
 			await expect(checkpoints).toBeChecked()
-			await sidebar.getByRole("button", { name: "Done" }).click()
+			await sidebar.getByRole("button", { name: "Save", exact: true }).click()
 
 			// A message sent during the turn joins Core's queue and runs with the
 			// settings in force when that turn ends; the setting change applies

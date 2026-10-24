@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
 	RATE_LIMIT_MAX_WAIT_MS,
 	RATE_LIMIT_RPM,
@@ -33,7 +33,7 @@ describe("SlidingWindowModelRateLimiter", () => {
 
 	it("RPM: waits until the oldest in-window request ages out", () => {
 		const rl = new SlidingWindowModelRateLimiter()
-		rl.updateLimits({ rpm: 3, tpm: 1_000_000 })
+		rl.updateLimits({ softRatio: 1, rpm: 3, tpm: 1_000_000 })
 		rl.noteRequest(T0)
 		rl.noteRequest(T0 + 10_000)
 		rl.noteRequest(T0 + 20_000)
@@ -54,7 +54,7 @@ describe("SlidingWindowModelRateLimiter", () => {
 
 	it("TPM: waits until enough token samples age out to drop below the limit", () => {
 		const rl = new SlidingWindowModelRateLimiter()
-		rl.updateLimits({ tpm: 100, rpm: 1000 })
+		rl.updateLimits({ softRatio: 1, tpm: 100, rpm: 1000 })
 		rl.recordUsage(60, T0)
 		rl.recordUsage(60, T0 + 30_000)
 		// now = T0+40s, sum=120 >= 100. The next request is predicted to be about as big as the last one (60, #121),
@@ -157,7 +157,7 @@ describe("applyRateLimitSettings", () => {
 		applyRateLimitSettings({ rpm: -1, tpm: Number.NaN, retryDelaySec: -5, maxRetries: undefined })
 		expect(dynamicModelRateLimiter.getLimits()).toEqual({ rpm: RATE_LIMIT_RPM, tpm: RATE_LIMIT_TPM })
 		expect(getRateLimitRetryDelayMs()).toBe(60_000)
-		expect(getRateLimitMaxRetries()).toBe(10)
+		expect(getRateLimitMaxRetries()).toBe(2)
 		expect(toolExecutionRateLimiter.getMinDelay()).toBe(10_000)
 	})
 })
@@ -236,7 +236,7 @@ describe("predictive TPM and pending tool-result reservation (#121)", () => {
 	const T0 = 1_000_000
 	const mk = () => {
 		const rl = new SlidingWindowModelRateLimiter()
-		rl.updateLimits({ tpm: 100, rpm: 1000, minSpacingMs: 0 })
+		rl.updateLimits({ softRatio: 1, tpm: 100, rpm: 1000, minSpacingMs: 0 })
 		return rl
 	}
 	it("waits when the last request size would push the next request over the limit, even though the window is still under it", () => {
@@ -274,7 +274,7 @@ describe("predictive TPM and pending tool-result reservation (#121)", () => {
 describe("429 後の冷却と倍々バックオフ (長期ペナルティ対策)", () => {
 	it("冷却中は maxWait を超えても期限まで待つ", () => {
 		const rl = new SlidingWindowModelRateLimiter()
-		rl.updateLimits({ rpm: 1000, tpm: 1_000_000, minSpacingMs: 0 })
+		rl.updateLimits({ softRatio: 1, rpm: 1000, tpm: 1_000_000, minSpacingMs: 0 })
 		rl.coolDown(300_000, 1000)
 		const { waitMs, reasons } = rl.computeWaitMs(1000)
 		expect(waitMs).toBe(300_000)
@@ -307,5 +307,109 @@ describe("リトライを諦めたらウォッチドッグを止める", () => {
 		expect(m.isRateLimitHalted()).toBe(true)
 		m.dynamicModelRateLimiter.recordUsage(10)
 		expect(m.isRateLimitHalted()).toBe(false)
+	})
+})
+
+describe("HTTP ゲート: 429 は SDK の再試行に任せず、本文つきのエラーで返す", () => {
+	it("429 を Error にして投げ、Gemini 以外のホストは素通しする", async () => {
+		const m = await import("./rate-limiter")
+		m.recordRateLimitSuccess()
+		const body = '{"error":{"code":429,"message":"You exceeded your current quota. Please retry in 27.9s"}}'
+		const base = vi.fn(async (input: unknown) =>
+			String(input).includes("generativelanguage") ? new Response(body, { status: 429 }) : new Response("ok", { status: 200 }),
+		)
+		const gated = m.createRateLimitedFetch(base as unknown as typeof fetch)
+		const err = await gated("https://generativelanguage.googleapis.com/v1beta/models/x:streamGenerateContent").catch((e) => e)
+		expect(err).toBeInstanceOf(Error)
+		expect(m.isRateLimitErrorText(err.message)).toBe(true)
+		expect(m.parseRetryAfterMs(err.message)).toBe(27_900)
+		expect((await gated("https://example.com/")).status).toBe(200)
+		m.recordRateLimitSuccess()
+	})
+})
+
+describe("RPM / TPM の 60% で止める (ツール単位も)", () => {
+	it("既定では上限の 60% に達したら待つ (RPM 10 なら 6 件目から)", () => {
+		const rl = new SlidingWindowModelRateLimiter()
+		rl.updateLimits({ rpm: 10, tpm: 1_000_000, minSpacingMs: 0 })
+		for (let i = 0; i < 5; i++) rl.noteRequest(T0 + i * 1000)
+		expect(rl.computeWaitMs(T0 + 10_000).waitMs).toBe(0) // 5/6
+		rl.noteRequest(T0 + 5000)
+		expect(rl.computeWaitMs(T0 + 10_000).waitMs).toBeGreaterThan(0) // 6/6
+	})
+
+	it("ツール実行前も同じ枠で待つ (最低間隔は見ない)", () => {
+		const rl = new SlidingWindowModelRateLimiter()
+		rl.updateLimits({ rpm: 1000, tpm: 100, minSpacingMs: 30_000 })
+		rl.noteRequest(T0)
+		expect(rl.computeWaitMs(T0 + 1000, true).waitMs).toBe(0) // 間隔だけなら、ツールは待たない
+		rl.recordUsage(70, T0) // 60% (= 60) を超えた
+		expect(rl.computeWaitMs(T0 + 1000, true).waitMs).toBeGreaterThan(0)
+	})
+})
+
+describe("429 と 503 / 504 の分離", () => {
+	it("503 / 504 / 過負荷はサーバー側の失敗として上限なし、429 / 枠切れは設定値", async () => {
+		const m = await import("./rate-limiter")
+		for (const t of [
+			"503 UNAVAILABLE: The model is overloaded. Please try again later.",
+			"504 DEADLINE_EXCEEDED",
+			"This model is currently experiencing high demand",
+		]) {
+			expect(m.isServerErrorText(t)).toBe(true)
+			expect(m.isRateLimitErrorText(t)).toBe(true) // 自動リトライの対象ではある
+			expect(m.rateLimitMaxRetriesFor(t)).toBe(Number.POSITIVE_INFINITY)
+			expect(m.formatRetryLimit(t)).toBe("∞")
+		}
+		const quota = "429 { \"error\": { \"code\": 429, \"message\": \"You exceeded your current quota\" } }"
+		expect(m.isServerErrorText(quota)).toBe(false)
+		expect(m.rateLimitMaxRetriesFor(quota)).toBe(m.getRateLimitMaxRetries())
+	})
+})
+
+describe("ブレーカーの解除", () => {
+	it("API キーが変わったら、開いているブレーカーを解除して送る", async () => {
+		const m = await import("./rate-limiter")
+		m.resetRateLimitBreaker("test")
+		const url = "https://generativelanguage.googleapis.com/v1beta/models/x:streamGenerateContent"
+		const base = vi.fn(async () => new Response('{"error":{"message":"You exceeded your current quota"}}', { status: 429 }))
+		const gated = m.createRateLimitedFetch(base as unknown as typeof fetch)
+		const withKey = (k: string) => ({ headers: { "x-goog-api-key": k } })
+		for (let i = 0; i < m.RATE_LIMIT_BREAKER_THRESHOLD; i++) {
+			await gated(url, withKey("AAAA-old-key-1111")).catch(() => undefined)
+		}
+		expect(m.isRateLimitBreakerOpen()).toBe(true)
+		const blocked = await gated(url, withKey("AAAA-old-key-1111")).catch((e) => e)
+		expect(String(blocked.message)).toContain("Changing the API key lifts the pause")
+		const callsBefore = base.mock.calls.length
+		await gated(url, withKey("BBBB-new-key-2222")).catch(() => undefined)
+		expect(base.mock.calls.length).toBe(callsBefore + 1) // 新しいキーは送られる
+		m.resetRateLimitBreaker("test end")
+	})
+})
+
+describe("HTTP ゲート: 全プロバイダで 429 / 5xx は SDK の内部再試行に任せず即座に返す", () => {
+	it("Gemini 以外のホストでも 429 / 503 は例外にして返し、200 はそのまま通す", async () => {
+		const m = await import("./rate-limiter")
+		const statuses: Record<string, number> = { "https://api.example.com/a": 429, "https://api.example.com/b": 503, "https://api.example.com/c": 200 }
+		const base = vi.fn(async (input: unknown) => new Response('{"error":{"message":"boom (mock)"}}', { status: statuses[String(input)] }))
+		const gated = m.createRateLimitedFetch(base as unknown as typeof fetch)
+		const e429 = await gated("https://api.example.com/a").catch((e) => e)
+		expect(e429.message).toContain("429 boom (mock)")
+		expect(m.isServerErrorText(e429.message)).toBe(false) // 429 は枠切れ側
+		const e503 = await gated("https://api.example.com/b").catch((e) => e)
+		expect(e503.message).toContain("503 boom (mock)")
+		expect(m.isServerErrorText("503 The model is overloaded")).toBe(true)
+		expect((await gated("https://api.example.com/c")).status).toBe(200)
+		expect(base).toHaveBeenCalledTimes(3) // 1 件につき 1 回だけ。内部再試行は起きない
+	})
+})
+
+describe("エラー見出し (HTTP ステータス + 種類)", () => {
+	it("429 / 503 を見分けて、画面に出す見出しを作る", async () => {
+		const { describeProviderError } = await import("@/shared/provider-error")
+		expect(describeProviderError("429 You exceeded your current quota")?.label).toBe("HTTP 429 · 枠切れ / レート制限")
+		expect(describeProviderError('{"error":{"code":503,"status":"UNAVAILABLE"}}')?.label).toBe("HTTP 503 · サーバー過負荷 / タイムアウト · UNAVAILABLE")
+		expect(describeProviderError("something else")).toBeUndefined()
 	})
 })

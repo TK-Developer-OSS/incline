@@ -58,7 +58,7 @@ for (const profile of profiles) {
 		await expect(terminalProfile).toHaveAttribute("current-value", profile.profileId)
 		await page.screenshot({ path: testInfo.outputPath("powershell-background-settings.png"), fullPage: true })
 
-		await sidebar.getByRole("button", { name: "Done" }).click()
+		await sidebar.getByRole("button", { name: "Save", exact: true }).click()
 		const inputbox = sidebar.getByTestId("chat-input")
 		await inputbox.fill("powershell_background_request")
 		await sidebar.getByTestId("send-button").click()

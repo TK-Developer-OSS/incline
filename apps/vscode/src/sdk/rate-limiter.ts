@@ -3,6 +3,7 @@ import {
 	PROVIDER_RATE_LIMIT_DEFAULTS,
 	RATE_LIMIT_MIN_SPACING_MS,
 	RATE_LIMIT_RPM,
+	RATE_LIMIT_SOFT_RATIO,
 	RATE_LIMIT_TPM,
 	RATE_LIMIT_WINDOW_MS,
 } from "@/shared/rate-limits"
@@ -118,6 +119,19 @@ export const modelRequestRateLimiter = new ApiRateLimiter(RATE_LIMIT_DEFAULT_DEL
  */
 export const toolExecutionRateLimiter = new ApiRateLimiter(RATE_LIMIT_DEFAULT_DELAY_MS)
 
+/**
+ * 各モデルリクエストの前に必ず入れる固定ウェイト (リクエスト 1 回あたり)。最低間隔 (minSpacing、前回から足りない分だけ待つ) と違い、
+ * 常に指定秒だけ待つ。既定 5 秒。0 で無効。
+ */
+export const RATE_LIMIT_DEFAULT_ACTION_DELAY_MS = 5000
+export const requestDelayRateLimiter = new ApiRateLimiter(RATE_LIMIT_DEFAULT_ACTION_DELAY_MS)
+
+/**
+ * 各ツール (アクション) の実行後に入れる固定ウェイト。結果をモデルに返す前に待つので、次のモデルリクエストまでの間隔が空く。
+ * 既定 5 秒。0 で無効。実行前のウェイトは toolExecutionRateLimiter。
+ */
+export const toolAfterRateLimiter = new ApiRateLimiter(RATE_LIMIT_DEFAULT_ACTION_DELAY_MS)
+
 // --- 動的 RPM/TPM スロットリング (beforeModel 用) ------------------------
 // 固定ウェイトではなく、直近60秒のリクエスト数 / トークン数が目安上限に
 // 近づいたときだけ必要なぶん待つスライディングウィンドウ方式。
@@ -161,11 +175,15 @@ export class SlidingWindowModelRateLimiter {
 	private rpm = RATE_LIMIT_RPM
 	private tpm = RATE_LIMIT_TPM
 	private minSpacingMs = RATE_LIMIT_MIN_SPACING_MS
+	private softRatio = RATE_LIMIT_SOFT_RATIO
 	private readonly windowMs = RATE_LIMIT_WINDOW_MS
 	private readonly maxWaitMs = RATE_LIMIT_MAX_WAIT_MS
 
 	/** 将来 AIモデル設定コンパネから上限を差し替える用。 */
-	public updateLimits(opts: { rpm?: number; tpm?: number; minSpacingMs?: number; rpd?: number | null }): void {
+	public updateLimits(opts: { rpm?: number; tpm?: number; minSpacingMs?: number; rpd?: number | null; softRatio?: number }): void {
+		if (typeof opts.softRatio === "number" && opts.softRatio > 0 && opts.softRatio <= 1) {
+			this.softRatio = opts.softRatio
+		}
 		if (opts.rpd === null) {
 			this.rpd = undefined
 		} else if (typeof opts.rpd === "number" && opts.rpd > 0) {
@@ -307,40 +325,43 @@ export class SlidingWindowModelRateLimiter {
 	 * 次のモデルリクエストまでに必要な待機時間 (ms) と理由。副作用として prune する
 	 * が reqTimes には積まない (acquire() が積む)。
 	 */
-	public computeWaitMs(now: number = Date.now()): { waitMs: number; reasons: string[] } {
+	public computeWaitMs(now: number = Date.now(), forTool = false): { waitMs: number; reasons: string[] } {
 		this.prune(now)
 		let waitMs = 0
 		const reasons: string[] = []
+		// 実際に守るのは目安上限の 60% (RATE_LIMIT_SOFT_RATIO)。
+		const rpmCap = Math.max(1, Math.floor(this.rpm * this.softRatio))
+		const tpmCap = Math.max(1, Math.floor(this.tpm * this.softRatio))
 
 		// RPM: ウィンドウ内リクエスト数が上限以上なら、枠が空くまで待つ
-		if (this.reqTimes.length >= this.rpm) {
-			const idx = Math.max(0, this.reqTimes.length - this.rpm)
+		if (this.reqTimes.length >= rpmCap) {
+			const idx = Math.max(0, this.reqTimes.length - rpmCap)
 			const freeAt = this.reqTimes[idx] + this.windowMs
 			waitMs = Math.max(waitMs, freeAt - now)
-			reasons.push(`RPM ${this.reqTimes.length}/${this.rpm}`)
+			reasons.push(`RPM ${this.reqTimes.length}/${rpmCap} (${Math.round(this.softRatio * 100)}% of ${this.rpm})`)
 		}
 
 		// TPM: ウィンドウ内トークン数 + 次のリクエストの予測 (直近のリクエストの大きさ + 予約したツール結果) が上限を超えるなら、
 		// 古いサンプルが十分抜けるまで待つ。予測を足さないと『今は上限未満』で送って、そのリクエスト自体が枠を超える (#121)。
 		const sum = this.tokenSum()
 		const next = this.predictNextRequestTokens()
-		if (sum + next >= this.tpm && sum > 0 && this.tokenSamples.length > 0) {
+		if (sum + next >= tpmCap && sum > 0 && this.tokenSamples.length > 0) {
 			let running = sum
 			let freeAt = now
 			for (const s of this.tokenSamples) {
 				running -= s.tokens
-				if (running + next < this.tpm) {
+				if (running + next < tpmCap) {
 					freeAt = s.at + this.windowMs
 					break
 				}
 				freeAt = s.at + this.windowMs
 			}
 			waitMs = Math.max(waitMs, freeAt - now)
-			reasons.push(next > 0 && sum < this.tpm ? `TPM ${sum}+next ${next}/${this.tpm}` : `TPM ${sum}/${this.tpm}`)
+			reasons.push(next > 0 && sum < tpmCap ? `TPM ${sum}+next ${next}/${tpmCap} (${Math.round(this.softRatio * 100)}% of ${this.tpm})` : `TPM ${sum}/${tpmCap} (${Math.round(this.softRatio * 100)}% of ${this.tpm})`)
 		}
 
 		// 最低スペーシング
-		if (this.minSpacingMs > 0 && this.reqTimes.length > 0) {
+		if (!forTool && this.minSpacingMs > 0 && this.reqTimes.length > 0) {
 			const sinceLast = now - this.reqTimes[this.reqTimes.length - 1]
 			const w = this.minSpacingMs - sinceLast
 			if (w > waitMs) {
@@ -359,6 +380,20 @@ export class SlidingWindowModelRateLimiter {
 			reasons.push("cooldown after 429")
 		}
 		return { waitMs, reasons }
+	}
+
+	/**
+	 * ツール実行の直前に呼ぶ。RPM / TPM が上限の 60% に達しているあいだは、ツールも動かさず待つ (リクエスト時刻は記録しない)。
+	 * ツール自体は枠を使わないが、結果が次のモデルリクエストになるので、枠が厳しいときはここで歩調を落とす。
+	 */
+	public async waitForToolHeadroom(callerName: string = "unknown"): Promise<void> {
+		const { waitMs, reasons } = this.computeWaitMs(Date.now(), true)
+		if (waitMs > 0 && !IS_TEST_ENV) {
+			const msg = `[INCLINE] [${inclineTimestamp()}] RateLimiter tool [${callerName}]: WAIT ${waitMs}ms (${reasons.join(", ")})`
+			Logger.log(msg)
+			logActivity("WAIT", `${waitMs}ms before ${callerName} (${reasons.join(", ")})`)
+			await new Promise((resolve) => setTimeout(resolve, waitMs))
+		}
 	}
 
 	/** モデルリクエスト直前に呼ぶ。必要なら待ち、リクエスト時刻を記録する。 */
@@ -398,7 +433,7 @@ export const dynamicModelRateLimiter = new SlidingWindowModelRateLimiter()
 // プロバイダから 429 / RESOURCE_EXHAUSTED / "exceeded your current quota" や、
 // 一時的な高負荷 ("experiencing high demand" / "overloaded" / "try again later" /
 // 5xx) が返ってターンが失敗したとき、一定時間待ってから自動でターンを再開する。
-// 暫定は固定60秒・最大10回。最終的には AIモデル設定コンパネから制御する。
+// 暫定は 60 秒からの倍々・最大2回。最終的には AIモデル設定コンパネから制御する。
 
 /** リトライまでの待機時間 (ms)。既定60秒。 */
 export const RATE_LIMIT_RETRY_DELAY_MS = 60_000
@@ -406,10 +441,9 @@ export const RATE_LIMIT_RETRY_DELAY_MS = 60_000
 export const RATE_LIMIT_RETRY_MAX_DELAY_MS = 20 * 60_000
 /**
  * 自動リトライの最大回数 (進捗なしの連続失敗)。超えたらエラーをそのまま UI に出す。
- * 10 回 (倍々バックオフで 60 秒から最大 20 分待つので、合計で数時間粘れる)。多すぎると、枠切れのキーを
- * 叩き続けて長期ペナルティになる。途中で1イテレーションでも前進すればカウントは 0 に戻る。
+ * 2 回 (60 秒、120 秒と待つ)。多いと、枠切れのキーを叩き続けて長期ペナルティになる。途中で1イテレーションでも前進すればカウントは 0 に戻る。
  */
-export const RATE_LIMIT_MAX_RETRIES = 10
+export const RATE_LIMIT_MAX_RETRIES = 2
 // --- ユーザー設定 (incline.rateLimit.*) による上書き -----------------------
 // 既定値は上の定数。applyRateLimitSettings() で実行中に差し替えられる。
 let retryDelayMs = RATE_LIMIT_RETRY_DELAY_MS
@@ -434,6 +468,10 @@ export interface RateLimitSettings {
 	retryDelaySec?: number
 	maxRetries?: number
 	toolDelaySec?: number
+	/** 各モデルリクエストの前の固定ウェイト (秒)。 */
+	requestDelaySec?: number
+	/** 各ツール実行後の固定ウェイト (秒)。 */
+	toolAfterDelaySec?: number
 }
 
 // 明示設定 (incline.rateLimit.*) > プロバイダ別既定 > 汎用既定 の順で有効値を決める。
@@ -465,6 +503,8 @@ export function applyRateLimitSettings(s: RateLimitSettings): void {
 	retryDelayMs = (nonNeg(s.retryDelaySec) ?? RATE_LIMIT_RETRY_DELAY_MS / 1000) * 1000
 	maxRetries = Math.floor(nonNeg(s.maxRetries) ?? RATE_LIMIT_MAX_RETRIES)
 	toolExecutionRateLimiter.updateMinDelay((nonNeg(s.toolDelaySec) ?? RATE_LIMIT_DEFAULT_DELAY_MS / 1000) * 1000)
+	requestDelayRateLimiter.updateMinDelay((nonNeg(s.requestDelaySec) ?? RATE_LIMIT_DEFAULT_ACTION_DELAY_MS / 1000) * 1000)
+	toolAfterRateLimiter.updateMinDelay((nonNeg(s.toolAfterDelaySec) ?? RATE_LIMIT_DEFAULT_ACTION_DELAY_MS / 1000) * 1000)
 }
 
 /**
@@ -488,7 +528,7 @@ export const RATE_LIMIT_RETRY_PROMPT = "[TASK RESUMPTION] Please continue where 
 // レート制限 / クォータ超過に加え、一時的なプロバイダ側エラー (高負荷・過負荷・
 // 一時的に利用不可・5xx) も「待って再試行すれば直る」類として自動リトライ対象にする。
 const RETRYABLE_PROVIDER_ERROR_PATTERN =
-	/resource_exhausted|exceeded your current quota|quota exceeded|rate.?limit|too many requests|\b429\b|please retry in|experiencing high demand|high demand|overloaded|try again later|temporarily unavailable|currently unavailable|service (is )?unavailable|\b50[234]\b/i
+	/resource_exhausted|exceeded your current quota|quota exceeded|rate.?limit|too many requests|\b429\b|please retry in|experiencing high demand|high demand|overloaded|try again later|temporarily unavailable|currently unavailable|service (is )?unavailable|deadline.?exceeded|\b50[234]\b/i
 
 /**
  * ターン結果テキスト等が「待てば直る」類のプロバイダエラー
@@ -497,6 +537,27 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN =
  */
 export function isRateLimitErrorText(text: string | undefined | null): boolean {
 	return typeof text === "string" && RETRYABLE_PROVIDER_ERROR_PATTERN.test(text) && !isDailyQuotaErrorText(text)
+}
+
+// Incline: サーバー側の一時的な失敗 (502 / 503 / 504・過負荷・高負荷・タイムアウト)。枠切れ (429) と違い、こちらの送信量が原因ではなく、
+// 待てば直る。回数に上限を設けず再試行を続ける (待ち時間は倍々で伸ばし、上限は SERVER_ERROR_MAX_DELAY_MS)。429 / 枠切れの文面を含むものは除く。
+const SERVER_ERROR_PATTERN =
+	/experiencing high demand|high demand|overloaded|try again later|temporarily unavailable|currently unavailable|service (is )?unavailable|deadline.?exceeded|\b50[234]\b/i
+const SERVER_ERROR_MAX_DELAY_MS = 5 * 60_000
+
+export function isServerErrorText(text: string | undefined | null): boolean {
+	return typeof text === "string" && SERVER_ERROR_PATTERN.test(text) && !QUOTA_CONTEXT_PATTERN.test(text) && !isDailyQuotaErrorText(text)
+}
+
+/** このエラーに対する自動リトライの上限。429 / 枠切れは設定値 (既定 2)、503 / 504 などは無制限。 */
+export function rateLimitMaxRetriesFor(text: string | undefined | null): number {
+	return isServerErrorText(text) ? Number.POSITIVE_INFINITY : maxRetries
+}
+
+/** 画面 / ログ用の上限表示 (無制限は ∞)。 */
+export function formatRetryLimit(text: string | undefined | null): string {
+	const n = rateLimitMaxRetriesFor(text)
+	return Number.isFinite(n) ? String(n) : "∞"
 }
 
 // Incline (#121): 1 日あたりの枠 (RPD) が尽きたことを示す文面。Gemini は quotaId に
@@ -531,10 +592,14 @@ export function rateLimitRetryDelayMs(text: string | undefined | null, attempt =
 		return 0
 	}
 	// 連続失敗するほど倍々で長く待つ (固定間隔で叩き続けると、プロバイダ側で長期ペナルティになる)。
-	const backoff = Math.min(retryDelayMs * 2 ** Math.max(0, attempt - 1), Math.max(retryDelayMs, RATE_LIMIT_RETRY_MAX_DELAY_MS))
+	const server = isServerErrorText(text)
+	const cap = server ? SERVER_ERROR_MAX_DELAY_MS : RATE_LIMIT_RETRY_MAX_DELAY_MS
+	const backoff = Math.min(retryDelayMs * 2 ** Math.max(0, Math.min(attempt, 30) - 1), Math.max(retryDelayMs, cap))
 	const waitMs = Math.max(backoff, parseRetryAfterMs(text) ?? 0)
-	// 429 を受けたら、次のモデルリクエストも同じ時間は送らない (別経路の再試行が割り込んで叩き続けないように)。
-	dynamicModelRateLimiter.coolDown(waitMs)
+	// 429 を受けたら、次のモデルリクエストも同じ時間は送らない (別経路の再試行が割り込んで叩き続けないように)。503 / 504 は枠とは無関係。
+	if (!server) {
+		dynamicModelRateLimiter.coolDown(waitMs)
+	}
 	return waitMs
 }
 
@@ -584,6 +649,23 @@ export function isRateLimitHalted(now: number = Date.now()): boolean {
 	return rateLimitGaveUp || breakerOpenUntil > now
 }
 
+/** ブレーカーを開いたときの API キーの指紋 (キーそのものは持たない)。キーが変わったら解除するために使う。 */
+let breakerKeyFingerprint: string | undefined
+
+export function resetRateLimitBreaker(why: string): void {
+	if (breakerOpenUntil > 0 || consecutiveRateLimitFailures > 0 || rateLimitGaveUp) {
+		logActivity("BREAKER", `reset (${why})`)
+	}
+	breakerOpenUntil = 0
+	consecutiveRateLimitFailures = 0
+	rateLimitGaveUp = false
+	breakerKeyFingerprint = undefined
+}
+
+export function breakerOpenUntilMs(): number {
+	return breakerOpenUntil
+}
+
 export function isRateLimitBreakerOpen(now: number = Date.now()): boolean {
 	return breakerOpenUntil > now
 }
@@ -598,6 +680,27 @@ const HTTP_COOLDOWN_BASE_MS = 30_000
 let lastHttpAt = 0
 let httpChain: Promise<void> = Promise.resolve()
 let httpConsecutive429 = 0
+
+/** リクエストの API キー (ヘッダ x-goog-api-key か ?key=) の短い指紋。キー本体はログにも変数にも残さない。 */
+function keyFingerprint(input: unknown, init?: RequestInit): string | undefined {
+	let key: string | undefined
+	try {
+		const h = init?.headers
+		if (h instanceof Headers) {
+			key = h.get("x-goog-api-key") ?? undefined
+		} else if (Array.isArray(h)) {
+			key = h.find(([k]) => k.toLowerCase() === "x-goog-api-key")?.[1]
+		} else if (h) {
+			const rec = h as Record<string, string>
+			key = rec["x-goog-api-key"] ?? rec["X-Goog-Api-Key"]
+		}
+		if (!key) {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as { url?: string })?.url
+			key = new URL(String(url)).searchParams.get("key") ?? undefined
+		}
+	} catch {}
+	return key ? `${key.length}:${key.slice(-4)}` : undefined
+}
 
 function urlLabel(input: unknown): string {
 	try {
@@ -637,6 +740,20 @@ async function waitHttpTurn(signal: AbortSignal | null | undefined): Promise<voi
 	await turn
 }
 
+/** SDK の内部再試行 (最大 6 回) に任せず、上に失敗として返すステータス。再試行は INCLINE のホスト側に一本化する。 */
+const FAIL_FAST_STATUSES = new Set([429, 502, 503, 504])
+
+async function failFastError(response: Response): Promise<Error> {
+	const body = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 1200)
+	// 人が読むメッセージを先頭に (画面の主文)、元の本文は後ろに付ける ("Original error" で見られる)。
+	let friendly = ""
+	try {
+		friendly = String(JSON.parse(body)?.error?.message ?? "")
+	} catch {}
+	const fallback = response.status === 429 ? "Too Many Requests" : `HTTP ${response.status}`
+	return new Error(`${response.status} ${friendly || fallback}${body ? ` -- Original response: ${body}` : ""}`)
+}
+
 /**
  * fetch にゲートを被せて返す。拡張は SDK に独自の fetch (プロキシ / CA 対応、providerConfig.fetch) を渡しており
  * globalThis.fetch を差し替えても素通りになるので、その fetch (resolveProviderFetch) をここで包む。
@@ -647,12 +764,24 @@ export function createRateLimitedFetch(original: typeof fetch): typeof fetch {
 	}
 	const gated = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
 		if (!gatedHost(input)) {
-			return original(input, init)
+			const res = await original(input, init)
+			if (FAIL_FAST_STATUSES.has(res.status)) {
+				logActivity("API", `HTTP ${res.status} ${urlLabel(input)} (fail fast: no SDK internal retry)`)
+				throw await failFastError(res)
+			}
+			return res
+		}
+		const fingerprint = keyFingerprint(input, init)
+		if (isRateLimitBreakerOpen() && breakerKeyFingerprint && fingerprint && fingerprint !== breakerKeyFingerprint) {
+			resetRateLimitBreaker("API key changed")
 		}
 		if (isRateLimitBreakerOpen()) {
 			// 開いている間は送らない。SDK の再試行も、ここで即座に失敗して終わる。
 			logActivity("API", `HTTP BLOCKED locally (breaker open): ${urlLabel(input)}`)
-			throw new Error("429 exceeded your current quota (suppressed locally: rate-limit circuit breaker is open)")
+			const until = new Date(breakerOpenUntilMs()).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })
+			throw new Error(
+				`429 exceeded your current quota. [INCLINE] Not sent: this API key got 429 five times in a row, so requests are paused locally until ${until} to avoid a longer penalty. Changing the API key lifts the pause immediately; otherwise it lifts automatically at ${until}.`,
+			)
 		}
 		const cooldown = dynamicModelRateLimiter.cooldownRemainingMs()
 		if (cooldown > 0 && !IS_TEST_ENV) {
@@ -669,8 +798,16 @@ export function createRateLimitedFetch(original: typeof fetch): typeof fetch {
 			const backoff = Math.min(HTTP_COOLDOWN_BASE_MS * 2 ** (httpConsecutive429 - 1), RATE_LIMIT_RETRY_MAX_DELAY_MS)
 			dynamicModelRateLimiter.coolDown(Math.max(backoff, Number.isFinite(headerMs) ? headerMs : 0))
 			if (recordRateLimitFailure()) {
+				breakerKeyFingerprint = fingerprint
 				Logger.error("[INCLINE] Rate-limit circuit breaker opened at the HTTP gate (consecutive 429s)")
 			}
+			// SDK 内部の再試行に任せず、ここで失敗として上に返す。任せると、冷却の待ちが積み重なって失敗が確定するまで画面に何も出ない
+			// (約 14 分)。上で Incline の自動リトライ (カウントダウン表示 / 中断 / 上限 / ウォッチドッグ抑止) に一本化する。
+			// 本文 (エラー文 + "retry in Ns" のヒント) を含めるので、isRateLimitErrorText / parseRetryAfterMs がそのまま効く。
+			throw await failFastError(response)
+		} else if (FAIL_FAST_STATUSES.has(response.status)) {
+			// 502 / 503 / 504 はサーバー側の失敗。枠 (429) とは別なので、ブレーカーには数えず、冷却もかけない。
+			throw await failFastError(response)
 		} else if (response.ok) {
 			httpConsecutive429 = 0
 			recordRateLimitSuccess()

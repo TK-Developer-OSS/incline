@@ -401,9 +401,21 @@
 				},
 				"incline.rateLimit.maxRetries": {
 					"type": "number",
-					"default": 10,
+					"default": 2,
 					"minimum": 0,
 					"description": "Maximum number of automatic retries (consecutive failures without progress). The count resets as soon as the run makes progress. 0 disables automatic retry."
+				},
+				"incline.rateLimit.requestDelaySec": {
+					"type": "number",
+					"default": 5,
+					"minimum": 0,
+					"description": "Fixed wait before every model request, in seconds (per request, always). 0 disables it. The minimum spacing between requests is separate."
+				},
+				"incline.rateLimit.toolAfterDelaySec": {
+					"type": "number",
+					"default": 5,
+					"minimum": 0,
+					"description": "Fixed wait after every tool execution (per action), in seconds, before the result goes back to the model. 0 disables it."
 				},
 				"incline.rateLimit.toolDelaySec": {
 					"type": "number",

@@ -295,7 +295,7 @@ describe("resolveProviderFetch", () => {
 		const gemini = resolveProviderFetch("gemini", undefined)
 		expect(gemini).not.toBe(netModule.fetch)
 		expect((gemini as unknown as { __inclineGated?: boolean }).__inclineGated).toBe(true)
-		expect(resolveProviderFetch("anthropic", undefined)).toBe(netModule.fetch)
+		expect((resolveProviderFetch("anthropic", undefined) as unknown as { __inclineGated?: boolean }).__inclineGated).toBe(true)
 	})
 
 	it("gives local model servers the idle-timeout-free fetch", () => {

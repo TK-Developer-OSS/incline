@@ -11,6 +11,12 @@ export const RATE_LIMIT_RPM = 15
 /** トークン毎分の目安上限 (入力+出力+キャッシュ)。 */
 export const RATE_LIMIT_TPM = 200_000
 
+/**
+ * スロットリングが実際に守る割合。RPM / TPM の目安上限そのものではなく、その 60% に達したら待つ (厳密でなくてよい。70% を超えないことが目的)
+ * (上限ぎりぎりまで使うと、見積もりの誤差や他の利用者との共有枠で 429 になるため)。ゲージの表示は目安上限のまま。
+ */
+export const RATE_LIMIT_SOFT_RATIO = 0.6
+
 /** スライディングウィンドウ幅 (ms)。 */
 export const RATE_LIMIT_WINDOW_MS = 60_000
 

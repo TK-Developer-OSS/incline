@@ -3,7 +3,31 @@ import * as path from "node:path"
 import { Logger } from "../services/Logger"
 import { ClineSyncStorage } from "./ClineStorage"
 
+/**
+ * Incline (#127): 古い版の拡張が残ったウィンドウが、新しい版の設定を古いメモリで書き戻すのを防ぐ。
+ * 書き込むたびに、書いたビルドの時刻とプロセス ID をファイルに記録し、自分より新しいビルドを、生きているプロセスが
+ * 書いているなら、自分は書き込まない (終了済みなら、ロールバックなので書いてよい)。拒否したら onStale を 1 回呼ぶ。
+ */
+export const staleWriterHooks: { onStale?: (info: { fileBuild: number; myBuild: number; writerPid: number }) => void } = {}
+
+const WRITER_BUILD_KEY = "__writerBuild"
+const WRITER_PID_KEY = "__writerPid"
+
+function processAlive(pid: number): boolean {
+	if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
+		return false
+	}
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM"
+	}
+}
+
 export interface ClineFileStorageOptions {
+	/** このプロセスの拡張ビルドの時刻 (ms)。0 / 未指定なら、上の保護は無効。 */
+	writerBuild?: number
 	/**
 	 * File permissions mode (e.g., 0o600 for owner read/write only).
 	 * If not set, uses the system default.
@@ -21,6 +45,8 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 	private data: Record<string, T>
 	private readonly fsPath: string
 	private readonly fileMode?: number
+	private readonly writerBuild: number
+	private staleReported = false
 	/** 最後にディスクと同期した時点のファイルの更新時刻 (ms)。これと今の更新時刻が違えば、他のウィンドウが書いたので、ファイルを正とする。 */
 	private syncedMtimeMs = 0
 
@@ -29,6 +55,7 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 		this.fsPath = filePath
 		this.name = name
 		this.fileMode = options?.fileMode
+		this.writerBuild = options?.writerBuild ?? 0
 		this.data = this.readFromDisk()
 		this.syncedMtimeMs = this.currentMtimeMs()
 	}
@@ -90,6 +117,18 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 				this.data = latest
 				this.syncedMtimeMs = this.currentMtimeMs()
 			}
+			// 自分より新しいビルドの、生きているウィンドウが書いている → 自分 (古い版) は書かない。
+			const fileBuild = Number((this.data as Record<string, unknown>)[WRITER_BUILD_KEY] ?? 0)
+			const writerPid = Number((this.data as Record<string, unknown>)[WRITER_PID_KEY] ?? 0)
+			if (this.writerBuild > 0 && fileBuild > this.writerBuild && processAlive(writerPid)) {
+				this.auditWrite(latest, ["(refused: stale writer)"])
+				if (!this.staleReported) {
+					this.staleReported = true
+					Logger.warn(`[${this.name}] this window runs an older build (${this.writerBuild}) than the one that wrote the settings (${fileBuild}, pid ${writerPid}); not writing. Reload the window.`)
+					staleWriterHooks.onStale?.({ fileBuild, myBuild: this.writerBuild, writerPid })
+				}
+				return Promise.resolve()
+			}
 			const changedKeys: string[] = []
 			for (const [key, value] of Object.entries(entries)) {
 				// 値が今のファイルと同じなら変更ではない (自分のメモリの古い値で、他のウィンドウの新しい値を上書きしない)。
@@ -107,6 +146,10 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 				}
 			}
 			if (changedKeys.length > 0) {
+				if (this.writerBuild > 0) {
+					;(this.data as Record<string, unknown>)[WRITER_BUILD_KEY] = this.writerBuild
+					;(this.data as Record<string, unknown>)[WRITER_PID_KEY] = process.pid
+				}
 				this.auditWrite(latest, changedKeys)
 				this.writeToDisk()
 				this.verifyWrite(entries, changedKeys)

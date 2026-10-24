@@ -104,11 +104,11 @@ describe("startWatchdog", () => {
 		expect(calls.messages).toHaveLength(0)
 	})
 
-	it("with no agent session it only messages the manager (nothing to wake)", async () => {
+	it("with no agent session (new-task screen / closed) it does nothing: there is nothing to resume", async () => {
 		stop = startWatchdog(api(work(1), null), 5, 60_000)
-		await advance(6 * 60_000)
+		await advance(12 * 60_000)
 		expect(calls.followups).toHaveLength(0)
-		expect(calls.messages).toHaveLength(1)
+		expect(calls.messages).toHaveLength(0)
 	})
 })
 
@@ -120,7 +120,7 @@ describe("startWatchdog: activity between samples", () => {
 		const postMessage = vi.fn(async () => {})
 		const api = {
 			phase: () => "awaiting_followup" as const,
-			taskId: () => undefined,
+			taskId: () => "t1",
 			pendingWork: async () => ({ aiInProgress: 1, waitingForHuman: 0 }),
 			followup: async () => {},
 			postMessage,

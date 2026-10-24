@@ -195,6 +195,7 @@ export async function getStateToPostToWebview(controller: {
 		mcpActive: isMcpActive(),
 		mcpPrompts: listMcpPrompts(),
 		inclineDebugMode: stateManager.getGlobalSettingsKey("inclineDebugMode") === true,
+		inclineRateLimit: stateManager.getGlobalSettingsKey("inclineRateLimit"),
 		inclineMcpEnabled: stateManager.getGlobalSettingsKey("inclineMcpEnabled") !== false,
 		inclineMcpSessionControl: stateManager.getGlobalSettingsKey("inclineMcpSessionControl") === true,
 		rateUsage: (() => {

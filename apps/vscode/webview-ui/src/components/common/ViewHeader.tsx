@@ -12,7 +12,10 @@ const ENV_DISPLAY_NAMES: Record<Environment, string> = {
 type ViewHeaderProps = {
 	title: string
 	onDone: () => void
-	/** Show a separate Close button next to Done (closes the view the same way; settings are saved as you change them). */
+	/**
+	 * Settings view: show "Cancel" next to "Save". Both close the view the same way today, because settings are saved
+	 * as you change them (a real draft / revert model is tracked as #128).
+	 */
 	showClose?: boolean
 	showEnvironmentSuffix?: boolean
 	environment?: Environment
@@ -37,12 +40,17 @@ const ViewHeader = ({ title, onDone, showClose, showEnvironmentSuffix, environme
 			</div>
 			<div className="flex gap-2">
 				{showClose && (
-					<Button data-testid="view-close" size="header" variant="secondary" onClick={onDone} title="Close (changes are already saved)">
-						Close
+					<Button
+						data-testid="view-close"
+						size="header"
+						variant="secondary"
+						onClick={onDone}
+						title="Cancel: closes this view. Changes you already made were saved as you typed and are not reverted.">
+						Cancel
 					</Button>
 				)}
-				<Button size="header" onClick={onDone}>
-					Done
+				<Button size="header" onClick={onDone} title={showClose ? "Save: closes this view (changes are saved as you type)" : undefined}>
+					{showClose ? "Save" : "Done"}
 				</Button>
 			</div>
 		</div>

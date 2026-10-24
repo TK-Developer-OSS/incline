@@ -336,6 +336,17 @@ describe("VscodeSessionHost auto-retry cancellation", () => {
 		await host.dispose()
 	})
 
+	it("retries a 503 beyond the 429 limit (server-side errors have no retry cap)", async () => {
+		const unavailable = { finishReason: "error", text: "503 UNAVAILABLE: The model is overloaded. Please try again later.", usage: {}, toolCalls: [] }
+		const send = vi.fn()
+		for (let i = 0; i < 6; i++) send.mockResolvedValueOnce(unavailable)
+		send.mockResolvedValueOnce({ finishReason: "completed", text: "ok", usage: {}, toolCalls: [] })
+		const host = await hostWithSend(send)
+		await host.send({ sessionId: "s503", prompt: "hi" } as never)
+		expect(send).toHaveBeenCalledTimes(7) // 429 の上限 (2 回) を超えて続く
+		await host.dispose()
+	})
+
 	it("stops retrying once the session is stopped (closed / switched away)", async () => {
 		let host!: VscodeSessionHost
 		const send = vi.fn().mockImplementation(async () => {

@@ -439,6 +439,7 @@ message UpdateSettingsRequest {
   optional bool incline_debug_mode = 147;
   optional bool incline_mcp_enabled = 148;
   optional bool incline_mcp_session_control = 149;
+  optional string incline_rate_limit_json = 150;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

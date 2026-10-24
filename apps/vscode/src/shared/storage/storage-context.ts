@@ -140,7 +140,12 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 	fsSync.mkdirSync(dataDir, { recursive: true })
 	fsSync.mkdirSync(workspaceDir, { recursive: true })
 
-	const globalState = new ClineFileStorage(path.join(dataDir, "globalState.json"), "GlobalState")
+	// この拡張のビルド時刻 (バンドルされたファイルの更新時刻)。古い版のウィンドウが新しい版の設定を書き戻さないための印。
+	let writerBuild = 0
+	try {
+		writerBuild = fsSync.statSync(__filename).mtimeMs
+	} catch {}
+	const globalState = new ClineFileStorage(path.join(dataDir, "globalState.json"), "GlobalState", { writerBuild })
 
 	return {
 		globalState,

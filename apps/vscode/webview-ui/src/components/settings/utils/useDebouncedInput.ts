@@ -17,6 +17,9 @@ import { useDebounceEffect } from "@/utils/useDebounceEffect"
  * @param debounceMs - Debounce delay in milliseconds (default: 500ms)
  * @returns The current value, an editing setter, and an authoritative sync setter
  */
+/** 保存したあと、古い echo を無視する時間 (ms)。 */
+const ECHO_WINDOW_MS = 3000
+
 export function useDebouncedInput<T>(
 	initialValue: T,
 	onChange: (value: T) => void,
@@ -41,6 +44,11 @@ export function useDebouncedInput<T>(
 		setLocalValueState(value)
 	}, [])
 
+	// 直近に自分が保存した値 (と、その編集前の値)。保存のあと、状態は遅れて・順番が前後して戻ってくるので、
+	// これらと同じ値の initialValue は「古い echo」とみなして入力欄に反映しない (反映すると、続けて打った文字が欠けたり、
+	// 古い値が保存し直されたりする)。一定時間 (ECHO_WINDOW_MS) 過ぎたら、他のウィンドウの変更として扱う。
+	const sentHistoryRef = useRef<{ values: T[]; until: number }>({ values: [], until: 0 })
+
 	// Sync local state when initialValue changes externally (e.g., when switching
 	// Plan/Act tabs). Skip the resync while a user edit is pending: because each
 	// debounced save round-trips through the backend and updates initialValue,
@@ -49,6 +57,10 @@ export function useDebouncedInput<T>(
 	useEffect(() => {
 		if (prevInitialValueRef.current !== initialValue) {
 			prevInitialValueRef.current = initialValue
+			const history = sentHistoryRef.current
+			if (Date.now() < history.until && history.values.includes(initialValue)) {
+				return
+			}
 			if (!hasPendingUserEditRef.current) {
 				setLocalValueState(initialValue)
 			}
@@ -62,6 +74,15 @@ export function useDebouncedInput<T>(
 				return
 			}
 			hasPendingUserEditRef.current = false
+			const history = sentHistoryRef.current
+			const now = Date.now()
+			if (now >= history.until) {
+				history.values = [prevInitialValueRef.current] // 編集を始める前の値
+			}
+			if (!history.values.includes(localValue)) {
+				history.values.push(localValue)
+			}
+			history.until = now + ECHO_WINDOW_MS
 			onChange(localValue)
 		},
 		debounceMs,

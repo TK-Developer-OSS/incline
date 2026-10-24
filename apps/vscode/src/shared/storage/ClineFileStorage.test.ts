@@ -2,7 +2,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { ClineFileStorage } from "./ClineFileStorage"
+import { ClineFileStorage, staleWriterHooks } from "./ClineFileStorage"
 
 describe("ClineFileStorage: 複数ウィンドウ (別プロセス) での共有", () => {
 	let dir: string
@@ -117,5 +117,58 @@ describe("ClineFileStorage.reloadIfChanged", () => {
 		expect(s.reloadIfChanged()).toBe(true)
 		expect(s.get("a")).toBe(2)
 		expect(s.reloadIfChanged()).toBe(false)
+	})
+})
+
+describe("ClineFileStorage: 古いビルドのウィンドウは新しいビルドの設定を上書きしない (#127)", () => {
+	let dir: string
+	let file: string
+	beforeEach(() => {
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), "incline-fs-"))
+		file = path.join(dir, "globalState.json")
+		fs.writeFileSync(file, JSON.stringify({ openAiBaseUrl: "OLD" }))
+		staleWriterHooks.onStale = undefined
+	})
+	afterEach(() => {
+		fs.rmSync(dir, { recursive: true, force: true })
+	})
+
+	it("refuses to write while a live process of a newer build wrote the file, and reports it once", () => {
+		const stale: Array<unknown> = []
+		staleWriterHooks.onStale = (info) => stale.push(info)
+		const newer = new ClineFileStorage(file, "GlobalState", { writerBuild: 2000 })
+		const older = new ClineFileStorage(file, "GlobalState", { writerBuild: 1000 })
+		newer.set("openAiBaseUrl", "http://127.0.0.1:11500/v1")
+		// 書いたプロセスは、このテストのプロセス自身では「別プロセス」と見なされないので、生きている別プロセス (親) を名乗る
+		const onDisk = JSON.parse(fs.readFileSync(file, "utf8"))
+		onDisk.__writerPid = process.ppid
+		fs.writeFileSync(file, JSON.stringify(onDisk))
+
+		older.set("openAiBaseUrl", "https://generativelanguage.googleapis.com/v1beta/openai/") // 古いメモリの値
+		older.set("somethingElse", 1)
+		const after = JSON.parse(fs.readFileSync(file, "utf8"))
+		expect(after.openAiBaseUrl).toBe("http://127.0.0.1:11500/v1") // 書き戻されない
+		expect(after.somethingElse).toBeUndefined()
+		expect(stale).toHaveLength(1) // 通知は 1 回だけ
+	})
+
+	it("writes when the newer writer is gone (rollback), and stamps its own build", () => {
+		const newer = new ClineFileStorage(file, "GlobalState", { writerBuild: 2000 })
+		newer.set("a", 1)
+		const onDisk = JSON.parse(fs.readFileSync(file, "utf8"))
+		onDisk.__writerPid = 2_000_000_000 // 存在しないプロセス
+		fs.writeFileSync(file, JSON.stringify(onDisk))
+
+		const older = new ClineFileStorage(file, "GlobalState", { writerBuild: 1000 })
+		older.set("b", 2)
+		const after = JSON.parse(fs.readFileSync(file, "utf8"))
+		expect(after.b).toBe(2)
+		expect(after.__writerBuild).toBe(1000)
+	})
+
+	it("is disabled when no build is given (CLI / tests)", () => {
+		const plain = new ClineFileStorage(file)
+		plain.set("x", 1)
+		expect(JSON.parse(fs.readFileSync(file, "utf8")).__writerBuild).toBeUndefined()
 	})
 })

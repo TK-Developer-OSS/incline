@@ -880,6 +880,12 @@ export class Controller {
 	 * MCP server management, OpenTelemetry, etc.).
 	 */
 	private startRemoteConfigTimer(): void {
+		// Incline (#127): 定期更新は止める。INCLINE には組織 (企業ポリシー) のリモート設定が無く、毎時の更新は
+		// 何も変えないのに設定ファイルに書き込む (clearRemoteConfig がトグルを毎回書く)。古いメモリのウィンドウが、
+		// その機会に新しい設定を書き戻す原因にもなった。起動時の 1 回は残す。必要なら環境変数 INCLINE_REMOTE_CONFIG_POLL=1 で戻せる。
+		if (process.env.INCLINE_REMOTE_CONFIG_POLL !== "1") {
+			return
+		}
 		// Set up 1-hour interval
 		this.remoteConfigTimer = setInterval(() => {
 			this.refreshRemoteConfig().catch((err) => Logger.error("[SdkController] Remote config timer failed:", err))

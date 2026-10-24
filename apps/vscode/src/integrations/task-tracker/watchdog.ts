@@ -104,6 +104,10 @@ export function startWatchdog(api: WatchdogApi, intervalMinutes: number, sampleM
 			if (api.rateLimitHalted?.()) {
 				return
 			}
+			// セッションが無い (「+」で新規画面にした / 閉じた) なら、再開する対象が無いので催促しない。
+			if (!api.taskId()) {
+				return
+			}
 			const busy = isBusy(api.phase())
 			if (busy) {
 				lastBusyAt = now()

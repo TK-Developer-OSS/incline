@@ -1,3 +1,4 @@
+import { describeProviderError } from "@/shared/provider-error"
 import type { AgentEvent, CoreSessionEvent } from "@cline/core"
 import { refreshClineRecommendedModels } from "@/core/controller/models/refreshClineRecommendedModels"
 import type { StateManager } from "@/core/storage/StateManager"
@@ -8,7 +9,7 @@ import { isClineManagedProvider } from "@/shared/utils/cline"
 import type { MessageTranslatorState, TranslationResult } from "./message-translator"
 import { translateSessionEvent } from "./message-translator"
 import { PROVIDER_FAILURE_ERROR_TYPE, PROVIDER_FAILURE_PHASE, type ProviderFailureTelemetry } from "./provider-failure-telemetry"
-import { dynamicModelRateLimiter, isRateLimitErrorText, getRateLimitMaxRetries, rateLimitRetryDelayMs } from "./rate-limiter"
+import { dynamicModelRateLimiter, formatRetryLimit, isRateLimitErrorText, rateLimitMaxRetriesFor, rateLimitRetryDelayMs } from "./rate-limiter"
 import type { SdkMessageCoordinator } from "./sdk-message-coordinator"
 import type { SdkSessionLifecycle } from "./sdk-session-lifecycle"
 import type { SdkTaskHistory } from "./sdk-task-history"
@@ -181,7 +182,7 @@ export class SdkSessionEventCoordinator {
 					Logger.debug("[SdkController] turn-complete straggler after cancel; preserving resumable phase")
 					this.endRateLimitEpisode()
 					this.options.sessions.setRunning(false)
-				} else if (this.rlEpisodeActive && this.rlRetryCount < getRateLimitMaxRetries()) {
+				} else if (this.rlEpisodeActive && this.rlRetryCount < rateLimitMaxRetriesFor(failureText)) {
 					// Incline: レート制限 / クォータ超過。VscodeSessionHost.send() が
 					// 待機して自動でターンを再開するので、「エラー」相 (Retry ボタン) には
 					// せず streaming を維持し、カウントダウンを表示する。isRunning も
@@ -191,7 +192,7 @@ export class SdkSessionEventCoordinator {
 						this.rlRetryCount++
 						this.rlTurnCounted = true
 						Logger.log(
-							`[SdkController] Rate-limit auto-retry: keeping turn streaming (attempt ${this.rlRetryCount}/${getRateLimitMaxRetries()})`,
+							`[SdkController] Rate-limit auto-retry: keeping turn streaming (attempt ${this.rlRetryCount}/${formatRetryLimit(failureText)})`,
 						)
 					}
 					this.beginRetryCountdown(failureText, activeSession.sessionId)
@@ -200,7 +201,7 @@ export class SdkSessionEventCoordinator {
 				} else if (errorSeen) {
 					if (this.rlEpisodeActive) {
 						Logger.error(
-							`[SdkController] Rate-limit auto-retry budget exhausted (${this.rlRetryCount}/${getRateLimitMaxRetries()}); surfacing error`,
+							`[SdkController] Rate-limit auto-retry budget exhausted (${this.rlRetryCount}/${formatRetryLimit(failureText)}); surfacing error`,
 						)
 					}
 					this.endRateLimitEpisode()
@@ -291,12 +292,42 @@ export class SdkSessionEventCoordinator {
 		return parts.join(" \n ")
 	}
 
+	private retryErrorText = ""
+	private statusAttemptNo = 0
+	private lastStatusTs = 0
+	private retryWaitSec = 0
+
+	/** その回のメッセージを確定させる (カウントダウンを止め、何回目で何を受けてどれだけ待ったかを残す)。 */
+	private finalizeRetryStatus(mark: string): void {
+		if (this.retryStatusTs === undefined) {
+			return
+		}
+		const label = describeProviderError(this.retryErrorText)?.label ?? "プロバイダのエラー"
+		this.options.messages.emitHookMessage({
+			ts: this.retryStatusTs,
+			type: "say",
+			say: "info",
+			text: `${mark} ${this.statusAttemptNo}/${formatRetryLimit(this.retryErrorText)} 回目: ${label} → ${this.retryWaitSec} 秒待って再試行しました`,
+			partial: false,
+		})
+	}
+
 	private beginRetryCountdown(errorText: string, sessionId: string): void {
+		this.retryErrorText = errorText
 		this.retryDeadlineMs = Date.now() + rateLimitRetryDelayMs(errorText, this.rlRetryCount)
 		this.retrySessionId = sessionId
-		if (this.retryStatusTs === undefined) {
-			this.retryStatusTs = Date.now()
+		// 1 回の失敗ごとに別のメッセージにする (1 つを書き換え続けると、下にエラーが積まれて上に埋もれ、何回目か分からなくなる)。
+		// 前の回のメッセージは「再試行しました」と確定させて残す。
+		if (this.retryStatusTs !== undefined && this.statusAttemptNo !== this.rlRetryCount) {
+			this.finalizeRetryStatus("🔁")
+			this.retryStatusTs = undefined
 		}
+		if (this.retryStatusTs === undefined) {
+			this.retryStatusTs = Math.max(Date.now(), this.lastStatusTs + 1)
+			this.lastStatusTs = this.retryStatusTs
+			this.statusAttemptNo = this.rlRetryCount
+		}
+		this.retryWaitSec = Math.max(1, Math.round((this.retryDeadlineMs - Date.now()) / 1000))
 		this.emitRetryStatusMessage()
 		if (this.retryStatusTicker) {
 			clearInterval(this.retryStatusTicker)
@@ -319,8 +350,8 @@ export class SdkSessionEventCoordinator {
 		const remainingSec = Math.max(0, Math.ceil((this.retryDeadlineMs - Date.now()) / 1000))
 		const text =
 			remainingSec > 0
-				? `⏳ プロバイダのエラー（レート制限 / クォータ超過 / 高負荷）を検知しました。約 ${remainingSec} 秒後に自動リトライします（${this.rlRetryCount}/${getRateLimitMaxRetries()}）`
-				: `🔄 自動リトライ中…（${this.rlRetryCount}/${getRateLimitMaxRetries()}）`
+				? `⏳ ${describeProviderError(this.retryErrorText)?.label ?? "プロバイダのエラー（レート制限 / クォータ超過 / 高負荷）"} を受信しました。約 ${remainingSec} 秒後に自動リトライします（${this.rlRetryCount}/${formatRetryLimit(this.retryErrorText)}）`
+				: `🔄 自動リトライ中…（${this.rlRetryCount}/${formatRetryLimit(this.retryErrorText)}）`
 		
 		Logger.log(`[SdkController] Emitting retry status for session ${activeSession.sessionId}: ${text.substring(0, 50)}...`)
 		
@@ -344,6 +375,9 @@ export class SdkSessionEventCoordinator {
 	 * setTurnPhase("error") を明示するので畳んでも影響しない。
 	 */
 	private endRateLimitEpisode(): void {
+		if (this.retryStatusTs !== undefined && this.rlEpisodeActive) {
+			this.finalizeRetryStatus("⏹")
+		}
 		if (this.retryStatusTicker) {
 			clearInterval(this.retryStatusTicker)
 			this.retryStatusTicker = undefined

@@ -179,6 +179,8 @@ export interface ExtensionState {
 	mcpPrompts?: string[]
 	/** Incline: デバッグモード (MCP の接続先を登録ファイルに書き、外部からも接続できる)。 */
 	inclineDebugMode?: boolean
+	/** Incline: 設定パネルのレート制限 / 自動リトライ (JSON 文字列)。 */
+	inclineRateLimit?: string
 	/** Incline: MCP サーバを起動するか / MCP からのセッション操作を許可するか。 */
 	inclineMcpEnabled?: boolean
 	inclineMcpSessionControl?: boolean

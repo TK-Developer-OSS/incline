@@ -9,11 +9,13 @@ import {
 	ApiRateLimiter,
 	isRateLimitErrorText,
 	modelRequestRateLimiter,
-	getRateLimitMaxRetries,
 	RATE_LIMIT_RETRY_PROMPT,
 	rateLimitRetryDelayMs,
 	isDailyQuotaErrorText,
+	formatRetryLimit,
 	isRateLimitBreakerOpen,
+	isServerErrorText,
+	rateLimitMaxRetriesFor,
 	markRateLimitGaveUp,
 	recordRateLimitFailure,
 	RATE_LIMIT_BREAKER_THRESHOLD,
@@ -286,11 +288,11 @@ export class VscodeSessionHost implements SdkSessionHost {
 			while (
 				result?.finishReason !== "completed" &&
 				isRateLimitErrorText(result?.text) &&
-				attempt < getRateLimitMaxRetries() &&
-				!isRateLimitBreakerOpen() &&
+				attempt < rateLimitMaxRetriesFor(result?.text) &&
+				(isServerErrorText(result?.text) || !isRateLimitBreakerOpen()) &&
 				!this.retryCancelled.has(input.sessionId)
 			) {
-				if (recordRateLimitFailure()) {
+				if (!isServerErrorText(result?.text) && recordRateLimitFailure()) {
 					Logger.error(`[VscodeSessionHost] Rate-limit circuit breaker opened; stopping auto-retry (session ${input.sessionId})`)
 					await sendNtfyNotification(
 						`Rate limit: ${RATE_LIMIT_BREAKER_THRESHOLD} failures in a row with no success — auto-retry and watchdog stopped for 1h. Check the API key / plan. ${String(result?.text).substring(0, 60)}`,
@@ -309,10 +311,10 @@ export class VscodeSessionHost implements SdkSessionHost {
 				}
 				totalRetries++
 				const waitMs = rateLimitRetryDelayMs(result?.text, attempt)
-				const logMsg = `[INCLINE] [${new Date().toISOString()}] Rate limit / quota error — auto-retry ${attempt}/${getRateLimitMaxRetries()} after ${waitMs}ms: ${String(result?.text).slice(0, 200)}`
+				const logMsg = `[INCLINE] [${new Date().toISOString()}] Rate limit / quota error — auto-retry ${attempt}/${formatRetryLimit(result?.text)} after ${waitMs}ms: ${String(result?.text).slice(0, 200)}`
 				Logger.warn(logMsg)
 				process.stderr.write(logMsg + "\n")
-				logActivity("RETRY", `session ${input.sessionId} attempt ${attempt}/${getRateLimitMaxRetries()} in ${Math.round(waitMs / 1000)}s: ${String(result?.text).slice(0, 120)}`)
+				logActivity("RETRY", `session ${input.sessionId} attempt ${attempt}/${formatRetryLimit(result?.text)} in ${Math.round(waitMs / 1000)}s: ${String(result?.text).slice(0, 120)}`)
 
 				await this.sleepUnlessCancelled(input.sessionId, waitMs)
 				if (this.retryCancelled.has(input.sessionId)) {
@@ -321,7 +323,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 				}
 
 				Logger.log(
-					`[VscodeSessionHost] Auto-retrying turn after rate limit (attempt ${attempt}/${getRateLimitMaxRetries()}, total ${totalRetries}) for session ${input.sessionId}`,
+					`[VscodeSessionHost] Auto-retrying turn after rate limit (attempt ${attempt}/${formatRetryLimit(result?.text)}, total ${totalRetries}) for session ${input.sessionId}`,
 				)
 				result = await this.inner.send({
 					sessionId: input.sessionId,
@@ -329,7 +331,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 					...(input.mode ? { mode: input.mode } : {}),
 				})
 			}
-			if (result?.finishReason !== "completed" && (isRateLimitErrorText(result?.text) || isDailyQuotaErrorText(result?.text))) {
+			if (result?.finishReason !== "completed" && !isServerErrorText(result?.text) && (isRateLimitErrorText(result?.text) || isDailyQuotaErrorText(result?.text))) {
 				markRateLimitGaveUp(`${totalRetries} retr${totalRetries === 1 ? "y" : "ies"} then ${String(result?.text).slice(0, 80)}`)
 			}
 			if (result?.finishReason !== "completed" && isDailyQuotaErrorText(result?.text)) {

@@ -10,9 +10,65 @@ import OrgClinePassRestrictionError from "@/components/chat/OrgClinePassRestrict
 import SpendLimitError from "@/components/chat/SpendLimitError"
 import { Button } from "@/components/ui/button"
 import { useClineAuth, useClineSignIn } from "@/context/ClineAuthContext"
+import { describeProviderError } from "@shared/provider-error"
 import { ClineError, ClineErrorType, MODEL_NOT_FOUND_GUIDANCE } from "../../../../src/services/error/ClineError"
 
 const _errorColor = "var(--vscode-errorForeground)"
+
+/**
+ * Incline: エラーを枠で囲み、元のエラー本文 (プロバイダが返した JSON など) は折りたたみで見られるようにする。
+ * 本文に "[INCLINE]" の注記 (ローカルで止めたときの説明) があれば、その注記を枠の中の主文にする。
+ */
+const splitInclineNotice = (text: string): { summary: string; raw: string } => {
+	const i = text.indexOf("[INCLINE]")
+	const body = i >= 0 ? text.slice(i + "[INCLINE]".length).trim() : text
+	// "... -- Original response: {json}" の後ろは主文に出さない (Original error の折りたたみに全文がある)。
+	const cut = body.indexOf(" -- Original response:")
+	return { summary: cut >= 0 ? body.slice(0, cut).trim() : body, raw: text }
+}
+
+/**
+ * 元のエラー本文から人が読むメッセージを取り出す。{"error":{"message":...}} のようにトップレベルに message が無い JSON だと、
+ * ClineError は String(object) = "[object Object]" を作ってしまうので、その場合はこちらで探す。
+ */
+const extractProviderMessage = (raw: string): string | undefined => {
+	const body = raw.slice(Math.max(0, raw.indexOf("{")))
+	try {
+		const parsed = JSON.parse(body)
+		const m = parsed?.error?.message ?? parsed?.message
+		if (typeof m === "string" && m.trim()) {
+			return m
+		}
+	} catch {}
+	return raw.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/)?.[1]
+}
+
+const ErrorFrame = ({ children, raw }: { children: React.ReactNode; raw?: string }) => {
+	// 見出し: HTTP ステータスと種類 (429 枠切れ / 503 過負荷など)。本文だけだと、何のエラーか分からないので。
+	const info = describeProviderError(raw)
+	return (
+	<div
+		className="flex flex-col gap-2 rounded p-2"
+		data-testid="error-frame"
+		style={{
+			border: "1px solid color-mix(in srgb, var(--vscode-errorForeground) 50%, transparent)",
+			background: "color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent)",
+		}}>
+		{info && (
+			<div className="text-xs font-semibold text-error" data-testid="error-badge">
+				{info.label}
+			</div>
+		)}
+		<div className="m-0 whitespace-pre-wrap text-error wrap-anywhere">{children}</div>
+		{raw && (
+			<details className="text-xs">
+				<summary className="cursor-pointer opacity-80">Original error</summary>
+				<pre className="m-0 mt-1 whitespace-pre-wrap wrap-anywhere opacity-80">{raw}</pre>
+			</details>
+		)}
+	</div>
+	)
+}
 
 interface ErrorRowProps {
 	message: ClineMessage
@@ -37,7 +93,11 @@ const ErrorRow = memo((props: ErrorRowProps) => {
 				if (rawApiError) {
 					// FIXME: ClineError parsing should not be applied to non-Cline providers, but it seems we're using clineErrorMessage below in the default error display
 					const clineError = ClineError.parse(rawApiError)
-					const errorMessage = clineError?._error?.message || clineError?.message || rawApiError
+					const parsedMessage = clineError?._error?.message || clineError?.message
+					const errorMessage =
+						typeof parsedMessage === "string" && parsedMessage !== "[object Object]"
+							? parsedMessage
+							: (extractProviderMessage(rawApiError) ?? rawApiError)
 					const requestId = clineError?._error?.request_id
 					const providerId = clineError?.providerId || clineError?._error?.providerId
 					// Deliberately narrower than the shared isClineManagedProvider (which
@@ -103,16 +163,16 @@ const ErrorRow = memo((props: ErrorRowProps) => {
 
 					if (clineError?.isErrorType(ClineErrorType.RateLimit)) {
 						return (
-							<p className="m-0 whitespace-pre-wrap text-error wrap-anywhere">
-								{errorMessage}
+							<ErrorFrame raw={rawApiError}>
+								{splitInclineNotice(errorMessage).summary}
 								{requestId && <div>Request ID: {requestId}</div>}
-							</p>
+							</ErrorFrame>
 						)
 					}
 
 					if (clineError?.isErrorType(ClineErrorType.QuotaExceeded)) {
 						const detailMessage = clineError?._error?.details?.message || errorMessage
-						return <p className="m-0 whitespace-pre-wrap text-error wrap-anywhere">{detailMessage}</p>
+						return <ErrorFrame raw={rawApiError}>{splitInclineNotice(detailMessage).summary}</ErrorFrame>
 					}
 
 					// A 404/405/410 is the server saying the model id or endpoint
@@ -150,7 +210,7 @@ const ErrorRow = memo((props: ErrorRowProps) => {
 					}
 
 					return (
-						<p className="m-0 whitespace-pre-wrap text-error wrap-anywhere flex flex-col gap-3">
+						<ErrorFrame raw={rawApiError}>
 							{/* Display the well-formatted error extracted from the ClineError instance */}
 
 							<header>
@@ -175,14 +235,14 @@ const ErrorRow = memo((props: ErrorRowProps) => {
 								</div>
 							)}
 
-							{/* Display raw API error if different from parsed error message */}
-							{errorMessage !== rawApiError && <div>{rawApiError}</div>}
-						</p>
+						</ErrorFrame>
 					)
 				}
 
 				// Regular error message
-				return <p className="m-0 mt-0 whitespace-pre-wrap text-error wrap-anywhere">{message.text}</p>
+				return (
+					<ErrorFrame raw={message.text}>{splitInclineNotice(message.text ?? "").summary}</ErrorFrame>
+				)
 
 			case "diff_error":
 				return (

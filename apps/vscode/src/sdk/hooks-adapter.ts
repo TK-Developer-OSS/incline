@@ -25,7 +25,14 @@ import { HookFactory } from "@/core/hooks/hook-factory"
 import { getHooksEnabledSafe } from "@/core/hooks/hooks-utils"
 import type { StateManager } from "@/core/storage/StateManager"
 import { logActivity } from "./activity-log"
-import { dynamicModelRateLimiter, estimateTokensFromText, setActiveRateLimitProvider, toolExecutionRateLimiter } from "./rate-limiter"
+import {
+	dynamicModelRateLimiter,
+	estimateTokensFromText,
+	requestDelayRateLimiter,
+	setActiveRateLimitProvider,
+	toolAfterRateLimiter,
+	toolExecutionRateLimiter,
+} from "./rate-limiter"
 
 export type HookMessageEmitter = (message: ClineMessage) => void
 
@@ -142,6 +149,7 @@ export function buildAgentHooks(
 			} catch {
 				// 取得できなければ現在の上限のまま
 			}
+			await requestDelayRateLimiter.wait("AgentRuntime.beforeModel (fixed per-request wait)")
 			await dynamicModelRateLimiter.acquire("AgentRuntime.beforeModel")
 			return undefined
 		},
@@ -167,6 +175,7 @@ export function buildAgentHooks(
 			// Incline [A]: 各ツール実行前の強制ウェイト (アクション単位のスロットリング)。
 			// ファイルフックの有効/無効 (hooksEnabled) とは無関係に常に効かせる。
 			// beforeModel の待機とは独立したパラメータ (toolExecutionRateLimiter)。
+			await dynamicModelRateLimiter.waitForToolHeadroom("AgentRuntime.beforeTool")
 			await toolExecutionRateLimiter.wait("AgentRuntime.beforeTool")
 			logActivity("TOOL", `start ${ctx.toolCall.toolName} ${JSON.stringify(ctx.input ?? {}).slice(0, 150)}`)
 
@@ -232,6 +241,8 @@ export function buildAgentHooks(
 			} catch {
 				// 見積もれなくても動作に影響しない
 			}
+			// 実行後の固定ウェイト (結果をモデルに返す前に待つ)。
+			await toolAfterRateLimiter.wait("AgentRuntime.afterTool")
 			let runningTs: number | undefined
 			try {
 				if (!hooksEnabled()) {

@@ -822,8 +822,8 @@ function isLocalNetworkUrl(baseUrl: string | undefined): boolean {
 
 export function resolveProviderFetch(sdkProviderId: string, baseUrl: string | undefined): typeof globalThis.fetch {
 	const base = LOCAL_SERVER_PROVIDERS.has(sdkProviderId) && isLocalNetworkUrl(baseUrl) ? fetchWithoutIdleTimeouts : fetch
-	// Incline: HTTP 単位のゲート (最低間隔 / 429 後の冷却 / ブレーカー)。SDK 内部の再試行もここを通る。枠の厳しい Gemini だけに被せる。
-	return sdkProviderId === "gemini" ? createRateLimitedFetch(base) : base
+	// Incline: HTTP 単位のゲート (最低間隔 / 429 後の冷却 / ブレーカー)。SDK 内部の再試行もここを通る。すべてのプロバイダで 429 / 502 / 503 / 504 は SDK の内部再試行に任せず上に返す。間隔 / 冷却 / ブレーカーは Gemini のみ。
+	return createRateLimitedFetch(base)
 }
 
 export function resolveBaseUrl(providerId: string, config: ApiConfiguration): string | undefined {

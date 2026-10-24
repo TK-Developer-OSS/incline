@@ -392,6 +392,34 @@ describe("SdkSessionEventCoordinator", () => {
 	})
 })
 
+describe("rate-limit retry status: one message per attempt", () => {
+	it("starts a new message for each attempt and finalizes the previous one", () => {
+		const { coordinator, options } = makeCoordinator()
+		const emit = vi.fn()
+		;(options.messages as unknown as { emitHookMessage: typeof emit }).emitHookMessage = emit
+		const c = coordinator as unknown as {
+			rlRetryCount: number
+			retrySessionId?: string
+			beginRetryCountdown(text: string, sessionId: string): void
+			retryStatusTicker?: ReturnType<typeof setInterval>
+		}
+		const quota = "429 You exceeded your current quota"
+		c.rlRetryCount = 1
+		c.beginRetryCountdown(quota, "session-123")
+		c.rlRetryCount = 2
+		c.beginRetryCountdown(quota, "session-123")
+		if (c.retryStatusTicker) clearInterval(c.retryStatusTicker)
+
+		const tsList = [...new Set(emit.mock.calls.map((call) => call[0].ts))]
+		expect(tsList).toHaveLength(2) // 1 回目と 2 回目は別のメッセージ
+		const first = emit.mock.calls.filter((call) => call[0].ts === tsList[0]).map((call) => call[0].text as string)
+		expect(first.at(-1)).toContain("1/2 回目") // 1 回目は「再試行しました」と確定して残る
+		expect(first.at(-1)).toContain("再試行しました")
+		const second = emit.mock.calls.filter((call) => call[0].ts === tsList[1]).map((call) => call[0].text as string)
+		expect(second.at(-1)).toContain("2/2")
+	})
+})
+
 function makeCoordinator(input: Partial<MakeCoordinatorInput> = {}) {
 	const event: CoreSessionEvent = {
 		type: "agent_event",

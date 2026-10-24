@@ -12,6 +12,7 @@ import { Logger } from "@/shared/services/Logger"
 import { telemetryService } from "../../../services/telemetry"
 import { BrowserSettings as SharedBrowserSettings } from "../../../shared/BrowserSettings"
 import { Controller } from ".."
+import { applyRateLimitConfigFromVscode } from "@/sdk/rate-limit-config"
 import { accountLogoutClicked } from "../account/accountLogoutClicked"
 import { normalizeProviderSwitchModel } from "../models/providerSwitchNormalization"
 import { createTaskApiModelShim, resolveActiveModelIdFromApiConfiguration } from "../models/taskApiModel"
@@ -278,6 +279,11 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("inclineDebugMode", request.inclineDebugMode)
 			// MCP の接続先の公開 (登録ファイル) を切り替える
 			setMcpDebugMode(request.inclineDebugMode)
+		}
+
+		if (request.inclineRateLimitJson !== undefined) {
+			controller.stateManager.setGlobalState("inclineRateLimit", request.inclineRateLimitJson)
+			applyRateLimitConfigFromVscode() // 設定パネルの値は VS Code 設定 (incline.rateLimit.*) より優先して、即座に反映する
 		}
 
 		if (request.inclineMcpEnabled !== undefined) {

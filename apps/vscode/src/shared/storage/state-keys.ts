@@ -268,6 +268,8 @@ const USER_SETTINGS_FIELDS = {
 	ntfyTopic: { default: undefined as string | undefined },
 	// Incline: デバッグモード。ON のとき MCP の接続先を ~/.incline/run に書き、別の VS Code / 外部のエージェントからも接続できる。
 	inclineDebugMode: { default: false as boolean },
+	/** 設定パネルの「Rate limit / auto-retry」(JSON: { maxRetries, retryDelaySec, minSpacingSec, rpm, tpm, toolDelaySec })。 */
+	inclineRateLimit: { default: undefined as string | undefined },
 	// Incline: MCP サーバを起動するか (既定 true) / MCP からのセッション操作 (session_*) を許可するか (既定 false)。
 	inclineMcpEnabled: { default: true as boolean },
 	// Deprecated: session control is no longer a separate switch (enabled together with MCP). Kept so old saved settings still load.
