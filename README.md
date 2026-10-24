@@ -50,10 +50,10 @@ An unofficial fork of [Cline](https://github.com/cline/cline) for VS Code, with 
 code --install-extension TKDeveloperOSS.incline
 ```
 
-**From a release file:** download `incline-4.1.25.vsix` from the [release page](https://github.com/TK-Developer-OSS/incline/releases/tag/Installer), then:
+**From a release file:** download `incline-4.1.28.vsix` from the [release page](https://github.com/TK-Developer-OSS/incline/releases/tag/Installer), then:
 
 ```bash
-code --install-extension incline-4.1.25.vsix
+code --install-extension incline-4.1.28.vsix
 ```
 
 or use *Extensions: Install from VSIX...* in VS Code. The file is self-contained and the same for every OS. Marketplace installs update automatically; a release file does not, so install the new `.vsix` over the old one. After any update, reload every open VS Code window. To verify a release file, compare the file's SHA-256 with the value in the release notes if you want to verify the download.
