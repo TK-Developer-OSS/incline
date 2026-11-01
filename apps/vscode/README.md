@@ -23,6 +23,47 @@ An unofficial fork of [Cline](https://github.com/cline/cline) for VS Code, with 
 - The agent reads and writes it through a built-in `task_tracker` tool (`incline.taskTracker.aiToolEnabled`); the file is locked so you and the AI do not overwrite each other. Search and filter by category and status, and reorder cards by hand.
 - The agent reports when it is done; you decide whether it really is, by marking it done or sending it back.
 
+#### The `task.md` format
+
+`task.md` lives in the workspace root. If it does not exist, INCLINE creates it with an instruction header at the top that describes the format, so an AI agent such as Claude Code that opens the file can learn the format from the file itself. An existing `task.md` is never overwritten. Prefer the `task_tracker` tool or the MCP tools (`task_list`, `task_create`, `task_update`, `task_note`) over editing by hand: they take the lock, number the tasks, stamp the times and keep the format valid. If you do edit the file directly, follow the rules below, because a strict parser reads it.
+
+- **One task = one section** that starts with `## [#<ID>] <title>`. The ID is a number, the highest existing ID + 1. Only headings of this exact form are tasks; any other heading (the introduction at the top, the `## カテゴリ` category list) is not.
+- **Metadata** goes right under the heading, one `- <key>: <value>` per line (order and indent do not matter):
+
+  | Key | Value |
+  |---|---|
+  | `status` | `未着手` not started, `対応中` in progress, `報告` reported (the work is done, waiting for you to check), `差戻` sent back for rework, `保留` on hold / blocked, `完了` done, `削除` soft-deleted (the row stays in the file). Use these exact words. |
+  | `category` | A name from the `## カテゴリ` list (optional). |
+  | `priority` | `HIGH`, `MIDDLE` or `LOW` (default `MIDDLE`). |
+  | `assignee` | Who works on it: a name such as `TK` or `AI`, or empty. |
+  | `creator`, `created` | Who registered it and when (`YYYY-MM-DD HH:MM`). |
+  | `updater`, `updated` | Who changed it last and when. Update on every change. |
+  | `備考` | Optional free remark. |
+
+- **History** is under a `### 履歴` heading: one `- <YYYY-MM-DD HH:MM> <name>: <text>` line per note. It is **append-only**: add lines at the end, never edit, reformat, reorder or delete existing ones. A line whose text starts with `data-tmp-::` is your unsaved draft from the panel; the AI must not touch it.
+- **Categories** are the `- <name>` lines under the `## カテゴリ` heading (default: バグ, タスク, 設計, メモ).
+
+```markdown
+## [#12] Fix the login redirect
+- status: 対応中
+- category: バグ
+- priority: HIGH
+- assignee: AI
+- creator: TK
+- created: 2026-10-31 09:00
+- updater: AI
+- updated: 2026-10-31 09:30
+- 備考: reported on the staging site
+
+### 履歴
+- 2026-10-31 09:00 TK: The redirect loops after login. Please fix.
+- 2026-10-31 09:30 AI: Started. The cause looks like the session cookie path.
+```
+
+**Workflow the agent follows.** It sets `対応中` and `assignee: AI` when it starts, adds a history line at each milestone, and when finished writes a final report (what it did, how it checked, what is left) and sets `報告`. Only you set `完了` or `削除`, unless you explicitly ask the agent to. After `差戻` it reads your newest note, redoes the work and reports again. If it needs a decision it adds a history line that starts with `[CONFIRM]` (question, options, its default): the card blinks and your phone is alerted until a later line starting with `[RESOLVED]` cancels it (`[CONFIRM:topic]` / `[RESOLVED:topic]` pair up several at once).
+
+**Locking.** The panel, the tools and other windows write the same file, so a direct edit must first create `task.md.lock` and delete it right after the last edit. A lock younger than 15 minutes means someone else is editing: wait. INCLINE removes a lock that has not been refreshed for 15 minutes or whose process is gone.
+
 ### Needs-you alerts and phone notifications
 
 - Write `[CONFIRM]` in a task's history when the AI needs a decision (or a test needs your eyes). The card blinks and an urgent push goes to your phone, repeated at intervals until someone writes `[RESOLVED]`.
