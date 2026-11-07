@@ -1,8 +1,9 @@
-import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
+import { VSCodeCheckbox, VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
 import { memo } from "react"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { languageOptions } from "@shared/Languages"
 import Section from "../Section"
 import { updateSetting } from "../utils/settingsHandlers"
 
@@ -28,7 +29,8 @@ const parseRateLimit = (json: string | undefined): Record<string, number> => {
 }
 
 const InclineSettingsSection = () => {
-	const { ntfyTopic, inclineDebugMode, inclineMcpEnabled, inclineRateLimit } = useExtensionState()
+	const { ntfyTopic, inclineDebugMode, inclineMcpEnabled, inclineRateLimit, inclineTaskLanguage, inclineTaskTranslate, inclineTaskTranslateTo } =
+		useExtensionState()
 	const rateLimit = parseRateLimit(inclineRateLimit)
 	const setRateLimit = (key: string, value: string) => {
 		const next = { ...rateLimit }
@@ -80,6 +82,49 @@ const InclineSettingsSection = () => {
 							<p className="text-xs text-muted-foreground">{f.help}</p>
 						</div>
 					))}
+				</div>
+			</Section>
+
+			{/* Incline Tasks の記述言語と、リフレッシュ時の母国語への AI 翻訳 */}
+			<Section>
+				<div className="space-y-3" data-testid="incline-task-language">
+					<Label className="text-sm font-medium text-foreground">Task language</Label>
+					<VSCodeDropdown
+						value={inclineTaskLanguage === "english" ? "english" : "free"}
+						data-testid="incline-task-language-select"
+						onChange={(e: any) => updateSetting("inclineTaskLanguage", e.target.value === "english" ? "english" : "free")}>
+						<VSCodeOption value="free">Free (no instruction)</VSCodeOption>
+						<VSCodeOption value="english">English</VSCodeOption>
+					</VSCodeDropdown>
+					<p className="text-xs text-muted-foreground">
+						Free: the AI writes task.md in whatever language it likes (the current behavior). English: the system prompt tells
+						the AI to write task titles, notes and reports in English. Text written by you is never changed.
+					</p>
+					<VSCodeCheckbox
+						checked={inclineTaskTranslate === true}
+						data-testid="incline-task-translate"
+						onChange={(e: any) => updateSetting("inclineTaskTranslate", e.target.checked === true)}>
+						Translate on refresh
+					</VSCodeCheckbox>
+					<Label className="text-xs text-foreground">Translate into</Label>
+					<VSCodeDropdown
+						value={inclineTaskTranslateTo || ""}
+						data-testid="incline-task-translate-to"
+						onChange={(e: any) => updateSetting("inclineTaskTranslateTo", e.target.value)}>
+						<VSCodeOption value="">Auto (VS Code display language)</VSCodeOption>
+						{languageOptions
+							.filter((o) => o.key !== "en")
+							.map((o) => (
+								<VSCodeOption key={o.key} value={o.key}>
+									{o.display}
+								</VSCodeOption>
+							))}
+					</VSCodeDropdown>
+					<p className="text-xs text-muted-foreground">
+						When you press Refresh in INCLINE Tasks, titles and history lines that are not in that language
+						are translated into the language selected here by the AI you have configured, and shown in gray under the original. The original in task.md is
+						never changed. Only new or changed lines are sent (translations are cached), so it uses tokens only for them.
+					</p>
 				</div>
 			</Section>
 

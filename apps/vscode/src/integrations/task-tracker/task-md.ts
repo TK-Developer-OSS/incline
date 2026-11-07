@@ -54,32 +54,62 @@ export interface ParsedTaskMd {
 	categories: readonly string[]
 }
 
-/** task.md が無い / 冒頭ブロックが空のときに書き込む既定の前文。 */
-export const DEFAULT_PREAMBLE = `# Incline タスクトラッカー (task.md)
+/**
+ * task.md が無い / 冒頭ブロックが空のときに書き込む既定の前文。AI (Claude Code など) が最初に読む取扱説明書なので英語で書く。
+ * 注意: 前文は最初の `## [#N]` / `## カテゴリ` で終わる。ここに例を書くときは、その形の行が行頭に来ないよう字下げすること。
+ */
+export const DEFAULT_PREAMBLE = `# INCLINE Tasks (task.md)
 
-Incline のバックログ。下部パネル "Incline Tasks" の Webview がこれを読み書きする。
-人間が直接編集してもよい。AI もタスク情報・進捗をここに追記する。
+This file is a backlog shared by the human (INCLINE Tasks panel), the AI agents, and other VS Code windows.
+It is plain Markdown. A strict parser reads it, so follow the format below exactly.
 
-## フォーマット規約
-- 1タスク = \`## [#<ID>] <件名>\` セクション。ID は連番（既存最大 +1）。
-  この形式の見出しだけがタスク。前文の見出しは無視される。
-- 見出し直後にメタを \`- <キー>: <値>\` で1行ずつ:
-  - \`status\`   : 未着手 | 対応中 | 報告 | 差戻 | 保留 | 完了 | 削除
-  - \`priority\` : HIGH | MIDDLE | LOW（一覧は HIGH が上。省略時 MIDDLE）
-  - \`assignee\` : 担当者（TK / AI / 空欄）
-  - \`creator\`  / \`created\` : 登録者 / 登録日時（YYYY-MM-DD HH:MM）
-  - \`updater\`  / \`updated\` : 更新者 / 更新日時（変更したら必ず更新）
-  - \`備考\`     : 任意メモ（省略可）
-- その下に \`### 履歴\`。内容（掲示板履歴）を \`- <日時> <名前>: <本文>\` で **追記のみ**。
-  既存行は書き換え・整形・並べ替えをしない。
+## READ THIS FIRST (for AI agents)
+- Prefer the tools over editing this file by hand: the \`task_tracker\` tool, or the INCLINE MCP tools
+  (\`task_list\`, \`task_create\`, \`task_update\`, \`task_note\`). They take the lock, assign IDs, stamp times and keep the format valid.
+- If you must edit the file directly: create \`task.md.lock\` first and delete it right after your last edit (if the lock is
+  younger than 15 minutes, someone else is editing: wait). Re-read the file just before editing and change only what you need.
+- Never rewrite the whole file from an older copy. Never delete or reorder existing tasks or history lines.
 
-## ルール
-- パーサは \`## [#<数字>] \` で分割し、メタ行と \`### 履歴\` 以降（不透明文字列）だけを見る。
-  \`- key: value\` の形式は保つ（字下げ・順序は自由）。
-- \`削除\` はソフト削除。行は残す。UI では既定で非表示。完了/削除もファイルから消さない。
-- AI: 着手時に \`対応中\`、区切りごとに \`### 履歴\` へ1行追記、作業が終わったら完了報告 (何をしたか・どう確認したか・残り) を履歴に残して \`報告\` にする (人間の確認待ちの印)。\`完了\` / \`削除\` にするのは人間 (明示的に頼まれたときだけ例外)。
-- 判断待ち: 人間の判断が要るときは、履歴の本文を \`[CONFIRM]\` で始める (質問・選択肢・既定の選択)。パネルでそのタスクと行が赤く点滅する。後の \`[RESOLVED]\` で始まる行が打ち消す (\`[CONFIRM:topic]\` / \`[RESOLVED:topic]\` で個別に対応)。人間が『変更を保存』で [CONFIRM] の次の行を確定すると AI に通知される。
-  自分が担当なら \`assignee: AI\`。
+## Format
+- One task = one section that starts with \`## [#<ID>] <title>\`. The ID is a number: the highest existing ID + 1.
+  Only headings of this exact form are tasks; any other heading (including every heading in this introduction) is ignored.
+- Right under the heading, metadata lines, one per line, as \`- <key>: <value>\` (indent and order do not matter):
+  - \`status\`: 未着手 (not started) | 対応中 (in progress) | 報告 (reported: the work is done, waiting for the human to check) |
+    差戻 (sent back by the human for rework) | 保留 (on hold / blocked) | 完了 (done) | 削除 (soft-deleted). Keep these exact words.
+  - \`category\`: one of the names listed in the "## カテゴリ" section below (optional).
+  - \`priority\`: HIGH | MIDDLE | LOW (default MIDDLE).
+  - \`assignee\`: who works on it (TK / AI / empty). \`creator\` / \`created\`: who and when (YYYY-MM-DD HH:MM). \`updater\` / \`updated\`: update them on every change.
+  - \`備考\`: optional free remark.
+- Then a \`### 履歴\` (history) heading. Under it, one line per note: \`- <YYYY-MM-DD HH:MM> <name>: <text>\`.
+  History is **append-only**: add lines at the end, never edit, reformat or delete existing lines.
+  A line whose text starts with \`data-tmp-::\` is the human's unsaved draft: do not touch it.
+
+Example (indented here only so that it is not parsed as a task):
+
+    ## [#12] Fix the login redirect
+    - status: 対応中
+    - category: バグ
+    - priority: HIGH
+    - assignee: AI
+    - creator: TK
+    - created: 2026-10-31 09:00
+    - updater: AI
+    - updated: 2026-10-31 09:30
+    - 備考: reported on the staging site
+
+    ### 履歴
+    - 2026-10-31 09:00 TK: The redirect loops after login. Please fix.
+    - 2026-10-31 09:30 AI: Started. The cause looks like the session cookie path.
+
+## Workflow rules
+- Start a task: set status 対応中 and assignee AI. Add a short history line at each milestone.
+- Finish: add a final report to the history (what you did, how you verified it, what is left) and set status 報告.
+  Only the human sets 完了 or 削除 (unless the human explicitly asked you to for that task). Use 保留 if you are blocked.
+- 差戻 means the human sent it back: read the newest human note, redo the work, set 対応中, then report again.
+- Need a human decision? Add a history line whose text STARTS with \`[CONFIRM]\` (question, options, your default). The card blinks and
+  the human's phone is alerted. A later line starting with \`[RESOLVED]\` cancels it (\`[CONFIRM:topic]\` / \`[RESOLVED:topic]\` for several at once).
+  A report is not a question: never start a report with [CONFIRM].
+- Do not report as done anything that is untested or unverified: say exactly what is unverified.
 
 ---
 `

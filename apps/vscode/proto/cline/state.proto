@@ -440,6 +440,9 @@ message UpdateSettingsRequest {
   optional bool incline_mcp_enabled = 148;
   optional bool incline_mcp_session_control = 149;
   optional string incline_rate_limit_json = 150;
+  optional string incline_task_language = 151;
+  optional bool incline_task_translate = 152;
+  optional string incline_task_translate_to = 153;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

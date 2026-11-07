@@ -2,6 +2,15 @@
 
 INCLINE is an unofficial fork of Cline. Changes before the fork point are documented upstream.
 
+## 4.1.29
+
+### Tasks translation (experimental)
+- New, off by default: *Translate on refresh* / *Translate into* in INCLINE Settings translate task titles and history lines for display on Refresh. `task.md` is not changed; failures fall back to the original text. See the README.
+
+### Settings no longer revert to OpenRouter
+- **If the original Cline extension is installed next to INCLINE, your provider could be reset to OpenRouter every time a window was opened or reloaded.** INCLINE pointed the shared extension-host environment (`CLINE_DIR`) at `~/.incline`, so the original Cline read and wrote INCLINE's settings file and overwrote it with its own defaults. INCLINE now uses its own `INCLINE_DIR` variable and the original Cline keeps using `~/.cline`.
+- The settings panel now sends only the field you changed. Previously every edit posted a copy of all provider / model / key fields, so a stale copy held by a panel (for example one opened in a second window) could write an old provider back.
+
 ## 4.1.28
 
 **Important: upgrade if you use 4.1.26 or earlier with a rate-limited API key (for example the Gemini free tier).** Older builds could keep sending requests after the provider answered 429 / quota exceeded: the SDK retried each request up to 5 more times, the auto-retry loop restarted the whole turn on a fixed 60-second timer, and the idle watchdog started new turns on top of that. A single stuck session could send more than a thousand requests overnight and earn a long penalty from the provider.

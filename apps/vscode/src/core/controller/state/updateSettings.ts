@@ -286,6 +286,21 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			applyRateLimitConfigFromVscode() // 設定パネルの値は VS Code 設定 (incline.rateLimit.*) より優先して、即座に反映する
 		}
 
+		if (request.inclineTaskLanguage !== undefined) {
+			controller.stateManager.setGlobalState(
+				"inclineTaskLanguage",
+				request.inclineTaskLanguage === "english" ? "english" : "free",
+			)
+		}
+
+		if (request.inclineTaskTranslate !== undefined) {
+			controller.stateManager.setGlobalState("inclineTaskTranslate", request.inclineTaskTranslate)
+		}
+
+		if (request.inclineTaskTranslateTo !== undefined) {
+			controller.stateManager.setGlobalState("inclineTaskTranslateTo", request.inclineTaskTranslateTo)
+		}
+
 		if (request.inclineMcpEnabled !== undefined) {
 			controller.stateManager.setGlobalState("inclineMcpEnabled", request.inclineMcpEnabled)
 			setMcpEnabled(request.inclineMcpEnabled)

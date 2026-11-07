@@ -8,6 +8,7 @@ import type { StorageContext } from "@/shared/storage/storage-context"
 import { Logger } from "@/shared/services/Logger"
 import { getServerAuthHash } from "@/utils/mcpAuth"
 import { arePathsEqual } from "@/utils/path"
+import { resolveInclineDirFromEnv } from "@/shared/storage/storage-context"
 
 const MCP_SETTINGS_FILE_NAME = "cline_mcp_settings.json"
 const MCP_SETTINGS_MIGRATION_KEY = "__vscodeLegacyMcpSettingsMigration"
@@ -260,7 +261,7 @@ export function getSharedMcpSettingsPath(storage: StorageContext): string {
 	if (explicitDataDir) {
 		return path.join(explicitDataDir, "settings", MCP_SETTINGS_FILE_NAME)
 	}
-	const clineDir = process.env.CLINE_DIR?.trim() || path.join(os.homedir(), ".cline")
+	const clineDir = resolveInclineDirFromEnv()
 	return path.join(clineDir, "data", "settings", MCP_SETTINGS_FILE_NAME)
 }
 

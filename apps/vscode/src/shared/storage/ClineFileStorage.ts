@@ -175,6 +175,7 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 			return
 		}
 		Logger.warn(`[${this.name}] write was overwritten by another process for: ${lost.join(", ")}; rewriting`)
+		this.auditWrite(after, lost.map((key) => `(rewrite after overwrite) ${key}`))
 		this.data = { ...after }
 		for (const key of lost) {
 			if (entries[key] === undefined) {

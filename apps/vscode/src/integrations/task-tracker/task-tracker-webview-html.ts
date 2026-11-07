@@ -1,7 +1,7 @@
 // "Incline Tasks" パネル Webview の自己完結 HTML (ビルド不要のバニラ JS)。
 // 拡張 <-> Webview のメッセージ:
 //   ext  -> web : { type: "tasks", tasks: Task[], categories: string[], author: string, filePath: string }
-//   web  -> ext : { type: "ready" } / { type: "refresh" }
+//   web  -> ext : { type: "ready" } / { type: "refresh", manual?: true }  (manual = the Refresh button: only then are lines translated)
 //                 { type: "create", title, content, priority, category }
 //                 { type: "update", id, patch: {title?,status?,category?,priority?,assignee?,remarks?} }
 //                 { type: "note",   id, text, tmp }   (tmp: 『変更を保存』まで未確定の印 data-tmp-:: 付きで追記)
@@ -67,6 +67,8 @@ export function getTaskTrackerHtml(nonce: string): string {
 	}
 	.notice { margin: 6px 0; padding: 6px 8px; border: 1px solid #ff4500; border-radius: 3px; background: #ff450018; }
 	.history .tmp-line { color: #ff4500; }
+	.orig { color: var(--vscode-descriptionForeground); opacity: .7; font-size: 0.85em; white-space: pre-wrap; word-break: break-word; }
+	.history .orig { padding-left: 1.2em; }
 	/* 判断待ち ([CONFIRM]): 該当の行は背景の赤みで、バッジ・ピルは塗りつぶさず枠線だけ (目が痛いため) を、やんわり点滅させる。文字は白。
 	   カードは赤い枠線・枠の影を付けず、背景の赤みだけをごく薄く点滅させる (TK 指示: 枠は毒々しい / 点滅は残す / 文字色は白)。 */
 	@keyframes confirm-card { from { background-color: #ff3c3c08; } to { background-color: #ff3c3c26; } }
@@ -122,8 +124,7 @@ export function getTaskTrackerHtml(nonce: string): string {
 	.pri.p-LOW    { opacity: .6; border: 1px solid var(--vscode-panel-border, #8886); }
 	.assignee { font-size: 11px; opacity: .8; }
 	.sub-meta { font-size: 11px; opacity: .65; margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; cursor: pointer; }
-	/* While a card is open the list does not scroll (#104): the open card's body scrolls inside itself, so reaching the end of the text never drags the whole list. */
-	body.card-open { overflow: hidden; }
+	/* The open card's body scrolls inside itself (overscroll-behavior: contain keeps the end of its text from dragging the list, #104); the list itself keeps scrolling with the mouse wheel over the other cards. */
 	body.card-open .card.open .detail { max-height: calc(100vh - 190px); overflow-y: auto; overscroll-behavior: contain; }
 	.detail { margin-top: 8px; border-top: 1px dashed var(--vscode-panel-border, #8886); padding-top: 8px; display: grid; gap: 6px; }
 	.detail label { display: grid; grid-template-columns: 64px 1fr; gap: 6px; align-items: center; font-size: 12px; opacity: .9; }
@@ -258,15 +259,19 @@ export function getTaskTrackerHtml(nonce: string): string {
 	}
 	function needsConfirm(t) { return !!t && t.status !== "完了" && t.status !== "削除" && openConfirmLines(t.history).length > 0; }
 	// 履歴を行ごとに描画し、未確定の追記は赤みオレンジで【未保存】と示す。判断待ちの行は赤く点滅。
-	function renderHistory(h) {
+	function renderHistory(h, tr) {
 		const lines = String(h || "").split("\\n").filter((l) => l.trim());
 		if (!lines.length) return "(no history)";
+		// A translation is the main text (normal colour) and the original sits under it, small and dim, so the translation is not missed.
+		const HPREFIX = /^(- \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2} [^\\s:]+: )/;
+		const shown = (l, i) => (tr && tr[i] ? (l.match(HPREFIX) || [""])[0] + tr[i] : l);
+		const origLine = (l, i) => (tr && tr[i] ? '<div class="orig">' + hl(l) + "</div>" : "");
 		const confirmLines = new Set(openConfirmLines(h).map((c) => c.line));
 		return lines.map((l, i) => confirmLines.has(i)
-			? '<div class="confirm-line">⚠ ' + hl(l) + "</div>"
+			? '<div class="confirm-line">⚠ ' + hl(shown(l, i)) + "</div>" + origLine(l, i)
 			: TMP_LINE.test(l)
 			? '<div class="tmp-line">' + hl(l.replace(/^(- \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2} [^\\s:]+: )data-tmp-::/, "$1[Unsaved] ")) + "</div>"
-			: "<div>" + hl(l) + "</div>").join("");
+			: "<div>" + hl(shown(l, i)) + "</div>" + origLine(l, i)).join("");
 	}
 	// 編集中 (未保存の項目変更 / 未確定の追記) かをホストに知らせ、ホストが task.md.lock を管理する。
 	let lastEditing = false;
@@ -382,7 +387,8 @@ export function getTaskTrackerHtml(nonce: string): string {
 					"</div>" +
 					// 件名は残りの幅をすべて使う。バッジ (判断待ち / カテゴリ / 担当者) は件名の下の行に回す (#101)。
 					'<div class="titleblock">' +
-						'<span class="title">' + hl(getVal("title")) + "</span>" +
+						'<span class="title">' + hl(t.titleTr || getVal("title")) + "</span>" +
+						(t.titleTr ? '<div class="orig">' + hl(getVal("title")) + "</div>" : "") +
 						(confirm || getVal("category") || t.assignee
 							? '<div class="tags">' +
 								(confirm ? '<span class="confirm-badge" title="Needs a human decision ([CONFIRM])">⚠ Needs decision</span>' : "") +
@@ -403,7 +409,7 @@ export function getTaskTrackerHtml(nonce: string): string {
 						'<label><span>Assignee</span><input class="' + dc("assignee", "js-assignee") + '" value="' + esc(getVal("assignee")) + '" placeholder="(unassigned)" /></label>' +
 						'<label><span>Remarks</span><input class="' + dc("remarks", "js-remarks") + '" value="' + esc(getVal("remarks")) + '" /></label>' +
 						'<div class="meta">Created: ' + esc(t.creator) + " " + esc(t.created) + " / Updated: " + esc(t.updater) + " " + esc(t.updated) + "</div>" +
-						'<div class="history">' + renderHistory(t.history) + "</div>" +
+						'<div class="history">' + renderHistory(t.history, t.historyTr) + "</div>" +
 						'<div class="hist-add">' +
 							'<textarea class="js-note" placeholder="Add a comment / progress note…">' + esc(noteDrafts[t.id] || "") + '</textarea>' +
 							'<button class="js-note-btn">Add note</button>' +
@@ -566,7 +572,7 @@ export function getTaskTrackerHtml(nonce: string): string {
 	catFilterEl.addEventListener("change", render);
 	searchEl.addEventListener("input", render);
 	document.getElementById("open-file").addEventListener("click", () => post({ type: "openFile" }));
-	document.getElementById("refresh-btn").addEventListener("click", () => post({ type: "refresh" }));
+	document.getElementById("refresh-btn").addEventListener("click", () => post({ type: "refresh", manual: true }));
 	document.getElementById("new-btn").addEventListener("click", () => {
 		document.getElementById("nd-title").value = "";
 		document.getElementById("nd-content").value = "";

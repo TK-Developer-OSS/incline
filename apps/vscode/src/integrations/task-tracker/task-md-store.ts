@@ -27,7 +27,7 @@ import {
 
 export interface CreateTaskInput {
 	title: string
-	/** 初回履歴 (内容)。省略時は「登録。」 */
+	/** 初回履歴 (内容)。省略時は "Registered." */
 	content?: string
 	status?: TaskStatus
 	category?: string
@@ -272,7 +272,7 @@ export class TaskMdStore {
 				updater: author,
 				updated: now,
 				remarks: (input.remarks ?? "").trim(),
-				history: appendHistoryLine("", author, input.content?.trim() || "登録。"),
+				history: appendHistoryLine("", author, input.content?.trim() || "Registered."),
 			}
 			parsed.tasks.push(task)
 			await this.save(parsed)

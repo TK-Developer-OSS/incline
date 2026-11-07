@@ -181,6 +181,10 @@ export interface ExtensionState {
 	inclineDebugMode?: boolean
 	/** Incline: 設定パネルのレート制限 / 自動リトライ (JSON 文字列)。 */
 	inclineRateLimit?: string
+	/** Incline: Tasks の記述言語 ("free" | "english") と、リフレッシュ時の母国語への AI 翻訳。 */
+	inclineTaskLanguage?: string
+	inclineTaskTranslate?: boolean
+	inclineTaskTranslateTo?: string
 	/** Incline: MCP サーバを起動するか / MCP からのセッション操作を許可するか。 */
 	inclineMcpEnabled?: boolean
 	inclineMcpSessionControl?: boolean

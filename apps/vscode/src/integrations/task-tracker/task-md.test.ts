@@ -155,7 +155,7 @@ describe("serializeTaskMd / round-trip", () => {
 	})
 
 	it("injects DEFAULT_PREAMBLE when preamble is blank", () => {
-		expect(serializeTaskMd({ preamble: "", tasks: [], categories: DEFAULT_CATEGORIES })).toContain("# Incline タスクトラッカー")
+		expect(serializeTaskMd({ preamble: "", tasks: [], categories: DEFAULT_CATEGORIES })).toContain("# INCLINE Tasks (task.md)")
 	})
 })
 
@@ -218,6 +218,23 @@ describe("TaskMdStore", () => {
 		await fs.rm(dir, { recursive: true, force: true })
 	})
 
+	it("the default preamble is a stable intro: nothing in it parses as a task or the category section", () => {
+		const text = serializeTaskMd({ preamble: DEFAULT_PREAMBLE, tasks: [], categories: DEFAULT_CATEGORIES })
+		const parsed = parseTaskMd(text)
+		expect(parsed.tasks).toEqual([])
+		expect(parsed.preamble.trim()).toBe(DEFAULT_PREAMBLE.replace(/\s+$/, "").trim())
+		for (const status of ["未着手", "対応中", "報告", "差戻", "保留", "完了", "削除"]) {
+			expect(DEFAULT_PREAMBLE).toContain(status)
+		}
+	})
+
+	it("ensureFile never overwrites an existing task.md", async () => {
+		await fs.writeFile(store.path, "# my own header\n\n## [#1] keep me\n- status: 未着手\n", "utf8")
+		await store.ensureFile()
+		expect(await fs.readFile(store.path, "utf8")).toContain("keep me")
+		expect(await fs.readFile(store.path, "utf8")).not.toContain("INCLINE Tasks (task.md)")
+	})
+
 	it("ensureFile writes the preamble-only file", async () => {
 		await store.ensureFile()
 		const raw = await fs.readFile(store.path, "utf8")
@@ -233,7 +250,7 @@ describe("TaskMdStore", () => {
 		expect(a.priority).toBe("MIDDLE")
 		expect(b.status).toBe("対応中")
 		expect(b.history).toMatch(/^- .* TK: 詳細$/)
-		expect(a.history).toMatch(/TK: 登録。$/)
+		expect(a.history).toMatch(/TK: Registered\.$/)
 	})
 
 	it("list() returns tasks sorted by priority (HIGH first)", async () => {

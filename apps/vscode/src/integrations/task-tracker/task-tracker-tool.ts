@@ -35,7 +35,7 @@ const INPUT_SCHEMA: Record<string, unknown> = {
 		},
 		id: { type: "number", description: "update / note の対象タスク ID" },
 		title: { type: "string", description: "件名 (create 必須、update 任意)" },
-		content: { type: "string", description: "create 時の初回履歴 (内容)。省略時は「登録。」" },
+		content: { type: "string", description: "create 時の初回履歴 (内容)。省略時は Registered." },
 		text: { type: "string", description: "note で履歴に追記するコメント本文" },
 		status: { type: "string", enum: [...TASK_STATUSES], description: "ステータス" },
 		category: { type: "string", description: "カテゴリ (task.md の `## カテゴリ` にある値。例: バグ / タスク / 設計 / メモ)" },
@@ -97,7 +97,7 @@ export function createTaskTrackerTool(cwd: string): AgentTool {
 						},
 						AUTHOR,
 					)
-					return `登録しました: ${formatTaskLine(task)}`
+					return `Created: ${formatTaskLine(task)}`
 				}
 				case "update": {
 					if (typeof input.id !== "number") {

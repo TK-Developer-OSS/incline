@@ -1,12 +1,30 @@
 import { ApiConfiguration } from "@shared/api"
-import { UpdateApiConfigurationRequest } from "@shared/proto/cline/models"
+import { UpdateApiConfigurationPartialRequest } from "@shared/proto/cline/models"
 import { convertApiConfigurationToProto } from "@shared/proto-conversions/models/api-configuration-conversion"
 import { Mode } from "@shared/storage/types"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
 
+/**
+ * Incline: send only the fields that changed. This used to post the webview's whole apiConfiguration with one field
+ * replaced, so a stale copy held by the panel (state not refreshed yet, or another window changed the provider)
+ * wrote its old provider / model / keys back over the saved settings whenever any single field was edited.
+ */
+const sendChangedFields = async (updates: Partial<ApiConfiguration>) => {
+	const fields = Object.keys(updates)
+	if (fields.length === 0) {
+		return
+	}
+	await ModelsServiceClient.updateApiConfigurationPartial(
+		UpdateApiConfigurationPartialRequest.create({
+			apiConfiguration: convertApiConfigurationToProto(updates),
+			updateMask: fields,
+		}),
+	)
+}
+
 export const useApiConfigurationHandlers = () => {
-	const { apiConfiguration, planActSeparateModelsSetting } = useExtensionState()
+	const { planActSeparateModelsSetting } = useExtensionState()
 
 	/**
 	 * Updates a single field in the API configuration.
@@ -19,17 +37,7 @@ export const useApiConfigurationHandlers = () => {
 	 * @param value - The new value for the field
 	 */
 	const handleFieldChange = async <K extends keyof ApiConfiguration>(field: K, value: ApiConfiguration[K]) => {
-		const updatedConfig = {
-			...apiConfiguration,
-			[field]: value,
-		}
-
-		const protoConfig = convertApiConfigurationToProto(updatedConfig)
-		await ModelsServiceClient.updateApiConfigurationProto(
-			UpdateApiConfigurationRequest.create({
-				apiConfiguration: protoConfig,
-			}),
-		)
+		await sendChangedFields({ [field]: value } as Partial<ApiConfiguration>)
 	}
 
 	/**
@@ -42,17 +50,7 @@ export const useApiConfigurationHandlers = () => {
 	 * @param updates - An object containing the fields to update and their new values
 	 */
 	const handleFieldsChange = async (updates: Partial<ApiConfiguration>) => {
-		const updatedConfig = {
-			...apiConfiguration,
-			...updates,
-		}
-
-		const protoConfig = convertApiConfigurationToProto(updatedConfig)
-		await ModelsServiceClient.updateApiConfigurationProto(
-			UpdateApiConfigurationRequest.create({
-				apiConfiguration: protoConfig,
-			}),
-		)
+		await sendChangedFields(updates)
 	}
 
 	const handleModeFieldChange = async <PlanK extends keyof ApiConfiguration, ActK extends keyof ApiConfiguration>(

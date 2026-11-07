@@ -7,10 +7,14 @@
 
 import * as path from "node:path"
 import * as vscode from "vscode"
+import { StateManager } from "@/core/storage/StateManager"
+import { buildApiHandlerWithHostContext } from "@/sdk/sdk-api-handler"
 import { Logger } from "@/shared/services/Logger"
 import { TaskMdStore } from "./task-md-store"
 import { onTasksChangedExternally } from "./task-events"
 import { TaskTrackerEditor, TaskTrackerSideView } from "./task-tracker-editor"
+import { readLastUsedProviderFromFile } from "@/core/storage/utils/state-helpers"
+import { pickTranslationConfig, targetLanguageName, TranslationCache } from "./task-translator"
 import { TASK_TRACKER_PANEL_TYPE, TASK_TRACKER_VIEW_ID, TaskTrackerViewProvider } from "./task-tracker-view"
 
 export { TaskMdStore } from "./task-md-store"
@@ -37,7 +41,35 @@ export function registerTaskTracker(context: vscode.ExtensionContext): void {
 	}
 
 	const store = new TaskMdStore(path.join(folder.uri.fsPath, "task.md"))
-	const provider = new TaskTrackerViewProvider(store)
+	// 起動時に task.md が無ければ、フォーマットの説明書き (前文) 付きで作る。すでにあるファイルには触らない。
+	void store.ensureFile().catch((error) => Logger.warn("[TaskTracker] could not create task.md:", error))
+	const provider = new TaskTrackerViewProvider(store, {
+		cache: new TranslationCache(path.join(context.globalStorageUri.fsPath, "task-translations.json")),
+		// 設定パネルの『Translate into』(空なら VS Code の表示言語) が英語以外で、チェックが ON のときだけ翻訳する。
+		language: () =>
+			StateManager.get().getGlobalSettingsKey("inclineTaskTranslate") === true
+				? targetLanguageName(StateManager.get().getGlobalSettingsKey("inclineTaskTranslateTo") || vscode.env.language)
+				: undefined,
+		// 設定済みの AI (Act モードのモデル) で 1 回きりの翻訳を行う。コミットメッセージ生成と同じ呼び方。
+		complete: async (system, user) => {
+			const handler = await buildApiHandlerWithHostContext(pickTranslationConfig(StateManager.get().getApiConfiguration(), readLastUsedProviderFromFile()), "act", {
+				disableReasoning: true,
+			})
+			let text = ""
+			let streamError: string | undefined
+			for await (const chunk of handler.createMessage(system, [{ role: "user" as const, content: user }])) {
+				if (chunk.type === "text") {
+					text += chunk.text
+				} else if (chunk.type === "done" && chunk.success === false) {
+					streamError = chunk.error
+				}
+			}
+			if (!text && streamError) {
+				throw new Error(streamError)
+			}
+			return text
+		},
+	})
 
 	// エディタ領域のタブとして開く。再読み込み前に開いていたタブは、シリアライザで復元する。
 	const editor = new TaskTrackerEditor(provider, vscode.Uri.joinPath(context.extensionUri, "assets", "icons", "icon.png"))

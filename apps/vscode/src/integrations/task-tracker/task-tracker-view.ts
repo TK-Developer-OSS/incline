@@ -8,6 +8,15 @@ import { isPossibleConfirmReply, TASK_PRIORITIES, TASK_STATUSES, type TaskPriori
 import { emitConfirmReply } from "./task-events"
 import { type CreateTaskInput, TaskMdStore, type UpdateTaskPatch } from "./task-md-store"
 import { getTaskTrackerHtml } from "./task-tracker-webview-html"
+import { annotate, type CompleteFn, collectItems, translateMissing, type TranslationCache } from "./task-translator"
+
+/** リフレッシュ時の AI 翻訳 (設定パネルの Translate チェック)。未指定 / 無効なら何もしない。 */
+export interface TaskTranslationHost {
+	cache: TranslationCache
+	/** 翻訳先の言語名 (例 "Japanese")。翻訳しない設定 / 英語なら undefined。 */
+	language(): string | undefined
+	complete: CompleteFn
+}
 
 /** エディタ領域のタブ (WebviewPanel) の viewType。 */
 export const TASK_TRACKER_PANEL_TYPE = "incline.tasksEditor"
@@ -44,7 +53,12 @@ export class TaskTrackerViewProvider {
 	private readonly targets = new Map<TaskWebviewTarget, vscode.Disposable[]>()
 	private autoRefreshTimer: ReturnType<typeof setInterval> | undefined
 
-	constructor(private readonly store: TaskMdStore) {}
+	private translating = false
+
+	constructor(
+		private readonly store: TaskMdStore,
+		private readonly translation?: TaskTranslationHost,
+	) {}
 
 	/** Manual order (#15): a list of task ids in a side file next to task.md. */
 	private get orderPath(): string {
@@ -123,7 +137,7 @@ export class TaskTrackerViewProvider {
 	}
 
 	/** ファイル監視 / ポーリング / Webview からの要求で呼ぶ: 最新タスクを送る。 */
-	async postTasks(): Promise<void> {
+	async postTasks(opts: { translate?: boolean } = {}): Promise<void> {
 		if (this.targets.size === 0) {
 			Logger.log("[TaskTracker] postTasks: no open Tasks view")
 			return
@@ -136,16 +150,45 @@ export class TaskTrackerViewProvider {
 			if (order.join(",") !== saved.join(",")) {
 				await this.writeOrder(order)
 			}
+			const language = this.translation?.language()
+			const cached = language && this.translation ? await this.translation.cache.get(language) : undefined
+			const sorted = sortByOrder(tasks, order)
 			const message = {
 				type: "tasks",
-				tasks: sortByOrder(tasks, order),
+				tasks: cached && language ? sorted.map((t) => ({ ...t, ...annotate(t, cached, language) })) : sorted,
 				categories,
 				author: this.author,
 				filePath: this.store.path,
 			}
 			await Promise.all([...this.targets.keys()].map((t) => t.webview.postMessage(message)))
+			if (opts.translate && language) {
+				void this.translateAndRepost(sorted, language)
+			}
 		} catch (error) {
 			Logger.error("[TaskTracker] postTasks failed:", error)
+		}
+	}
+
+	/** リフレッシュ時だけ: 訳していない行を AI で訳してキャッシュし、画面を更新する。失敗しても止まらない。 */
+	private async translateAndRepost(tasks: Parameters<typeof collectItems>[0], language: string): Promise<void> {
+		const host = this.translation
+		if (!host || this.translating) {
+			return
+		}
+		this.translating = true
+		try {
+			const cache = await host.cache.get(language)
+			const added = await translateMissing(collectItems(tasks, language), cache, language, host.complete, (error) =>
+				Logger.warn("[TaskTracker] translation failed (showing the original):", error),
+			)
+			if (added > 0) {
+				await host.cache.save()
+				await this.postTasks()
+			}
+		} catch (error) {
+			Logger.warn("[TaskTracker] translation failed (showing the original):", error)
+		} finally {
+			this.translating = false
 		}
 	}
 
@@ -157,8 +200,10 @@ export class TaskTrackerViewProvider {
 		try {
 			switch (m.type) {
 				case "ready":
-				case "refresh":
 					await this.postTasks()
+					return
+				case "refresh":
+					await this.postTasks({ translate: m.manual === true })
 					return
 				case "categories": {
 					const list: string[] = Array.isArray(m.list) ? m.list.map((v) => String(v)) : []

@@ -270,6 +270,12 @@ const USER_SETTINGS_FIELDS = {
 	inclineDebugMode: { default: false as boolean },
 	/** 設定パネルの「Rate limit / auto-retry」(JSON: { maxRetries, retryDelaySec, minSpacingSec, rpm, tpm, toolDelaySec })。 */
 	inclineRateLimit: { default: undefined as string | undefined },
+	/** Incline Tasks の記述言語: "free" (既定: 指示しない) / "english" (システムプロンプトで英語での記述を指示)。 */
+	inclineTaskLanguage: { default: "free" as string },
+	/** Incline Tasks をリフレッシュしたとき、AI で母国語に翻訳して表示するか (既定 false)。原本の task.md は変えない。 */
+	inclineTaskTranslate: { default: false as boolean },
+	/** 翻訳先の言語キー (例 "ja")。空 = VS Code の表示言語。 */
+	inclineTaskTranslateTo: { default: "" as string },
 	// Incline: MCP サーバを起動するか (既定 true) / MCP からのセッション操作 (session_*) を許可するか (既定 false)。
 	inclineMcpEnabled: { default: true as boolean },
 	// Deprecated: session control is no longer a separate switch (enabled together with MCP). Kept so old saved settings still load.

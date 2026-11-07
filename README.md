@@ -67,6 +67,12 @@ An unofficial fork of [Cline](https://github.com/cline/cline) for VS Code, with 
 
 **Locking.** The panel, the tools and other windows write the same file, so a direct edit must first create `task.md.lock` and delete it right after the last edit. A lock younger than 15 minutes means someone else is editing: wait. INCLINE removes a lock that has not been refreshed for 15 minutes or whose process is gone.
 
+**Translation (experimental, off by default).** In INCLINE Settings, turn on *Translate on refresh* and pick *Translate into* (empty = VS Code's display language). When you press Refresh in the Tasks panel, the titles and history lines are sent to the AI you last used and the translations are shown in the panel only; `task.md` is never changed. Details:
+- It runs only on a manual Refresh, and does nothing when the target is English or the switch is off.
+- Lines already mostly in the target language are not sent. Translations are cached by a hash of the original text (`task-translations.json` in the extension's storage), so only new or changed lines are sent. At most 60 lines (about 6000 characters per request) per Refresh.
+- Anything sent is task text, so it goes to your configured provider and counts against its quota.
+- If the model's reply cannot be read, or the request fails (e.g. 429), that batch is skipped and the original text is shown. A warning appears in the Output panel. It is still being tuned and may fail with some models.
+
 ### Needs-you alerts and phone notifications
 
 - Write `[CONFIRM]` in a task's history when the AI needs a decision (or a test needs your eyes). The card blinks and an urgent push goes to your phone, repeated at intervals until someone writes `[RESOLVED]`.
@@ -94,10 +100,10 @@ An unofficial fork of [Cline](https://github.com/cline/cline) for VS Code, with 
 code --install-extension TKDeveloperOSS.incline
 ```
 
-**From a release file:** download `incline-4.1.28.vsix` from the [release page](https://github.com/TK-Developer-OSS/incline/releases/tag/Installer), then:
+**From a release file:** download `incline-4.1.29.vsix` from the [release page](https://github.com/TK-Developer-OSS/incline/releases/tag/Installer), then:
 
 ```bash
-code --install-extension incline-4.1.28.vsix
+code --install-extension incline-4.1.29.vsix
 ```
 
 or use *Extensions: Install from VSIX...* in VS Code. The file is self-contained and the same for every OS. Marketplace installs update automatically; a release file does not, so install the new `.vsix` over the old one. After any update, reload every open VS Code window. To verify a release file, compare the file's SHA-256 with the value in the release notes if you want to verify the download.

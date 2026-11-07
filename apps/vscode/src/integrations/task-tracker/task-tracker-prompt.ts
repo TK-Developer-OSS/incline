@@ -33,3 +33,9 @@ export const TASK_TRACKER_PROMPT_SECTION = `# Shared backlog (task.md)
 - The human answers by adding a line below your [CONFIRM] in the panel and pressing "Save changes". INCLINE then tells you with an "[INCLINE NOTICE]" message that a reply may have arrived. Read the task history after your [CONFIRM] line, act on the answer, and when your question is answered add a note starting with [RESOLVED] that states the decision. If the reply does not answer your question, keep waiting and do not add [RESOLVED].
 - Whenever you are about to ask the human a question or need their decision (including before asking in the chat), ALSO record it as a \`[CONFIRM]\` note on the relevant task (create a task first if none fits). That is what rings the human's phone alarm; a plain question in the chat does not. Use it only for real decisions, not for status updates.
 - Task listings (task_list) mark tasks with an open [CONFIRM] as "⚠CONFIRM": check them at the start of a run.`
+
+
+/** 設定パネル「Task language = English」のとき、システムプロンプトに足す。 */
+export const TASK_LANGUAGE_ENGLISH_SECTION = `## Language of task.md entries
+
+Write everything you put into task.md in English: task titles, descriptions, remarks, history notes, progress and completion reports, and [CONFIRM] / [RESOLVED] questions and answers. Keep the fixed markers and status names exactly as they are (for example 対応中, 報告, [CONFIRM], [RESOLVED]). Do not translate text written by the human or by someone else; only the text you write must be English. Replies in the chat still follow the user's own language setting.`

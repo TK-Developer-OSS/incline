@@ -58,7 +58,7 @@ import type { ResolvedModelSelection } from "./model-catalog/contracts"
 import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from "./model-catalog/model-values"
 import { parseProviderId } from "./model-catalog/provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
-import { TASK_TRACKER_PROMPT_SECTION } from "@/integrations/task-tracker/task-tracker-prompt"
+import { TASK_LANGUAGE_ENGLISH_SECTION, TASK_TRACKER_PROMPT_SECTION } from "@/integrations/task-tracker/task-tracker-prompt"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
 import type { SdkSessionHost } from "./session-host"
@@ -1145,6 +1145,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 
 	// Incline: task.md (共有バックログ) の排他制御ルールを AI に伝える。
 	systemPrompt = `${systemPrompt}\n\n${TASK_TRACKER_PROMPT_SECTION}`
+	if (StateManager.get().getGlobalSettingsKey("inclineTaskLanguage") === "english") {
+		systemPrompt = `${systemPrompt}\n\n${TASK_LANGUAGE_ENGLISH_SECTION}`
+	}
 
 	const stateManager = StateManager.get()
 	// Auto compact is on by default; keep this fallback aligned with the

@@ -38,6 +38,7 @@ import {
 } from "@shared/proto/cline/marketplace"
 import { HostProvider } from "@/hosts/host-provider"
 import type { Controller } from "../index"
+import { resolveInclineDirFromEnv } from "@/shared/storage/storage-context"
 
 type MarketplaceType = "mcp" | "skill" | "plugin"
 
@@ -185,7 +186,7 @@ function hashSource(source: string): string {
 }
 
 function resolveClineHome(): string {
-	return process.env.CLINE_DIR?.trim() || join(homedir(), ".cline")
+	return resolveInclineDirFromEnv()
 }
 
 function sanitizeSegment(value: string): string {

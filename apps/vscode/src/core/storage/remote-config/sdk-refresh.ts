@@ -9,6 +9,7 @@ import { Logger } from "@/shared/services/Logger"
 import type { ConfiguredAPIKeys } from "@/shared/storage/state-keys"
 import { SdkRemoteConfigControlPlane } from "./sdk-control-plane"
 import { applyRemoteConfig, clearRemoteConfig } from "./utils"
+import { resolveInclineDirFromEnv } from "@/shared/storage/storage-context"
 
 export interface RefreshSdkRemoteConfigOptions {
 	workspacePath?: string
@@ -71,7 +72,7 @@ export async function clearSdkRemoteConfig(
 }
 
 async function ensureGlobalRemoteConfigWorkspacePath(): Promise<string> {
-	const clineDir = process.env.CLINE_DIR || path.join(os.homedir(), ".cline")
+	const clineDir = resolveInclineDirFromEnv()
 	const workspacePath = path.join(clineDir, "data", "remote-config-workspace")
 	await fs.mkdir(workspacePath, { recursive: true })
 	return workspacePath

@@ -86,9 +86,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// 0. Pin the SDK's home directory to ~/.incline (not ~/.cline) so sessions,
 	// task history and settings are never shared with the upstream Cline.
-	// Must run before anything touches the SDK or reads CLINE_DIR.
+	// Must run before anything touches the SDK or reads the home directory.
+	// Use INCLINE_DIR, not CLINE_DIR: every extension in this window shares one extension host (one process.env), and the
+	// upstream Cline reads CLINE_DIR, so setting it made Cline use Incline's data dir and write its defaults (openrouter) over it.
 	const inclineDir = resolveInclineDirFromEnv()
-	process.env.CLINE_DIR = inclineDir
+	process.env.INCLINE_DIR = inclineDir
 	setClineDir(inclineDir)
 	// Before anything spawns with the workspace as cwd (rg, git, hooks, MCP).
 	disableCurrentDirectoryExecutableSearch()
